@@ -1,0 +1,168 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Распознавание речи</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .controls {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        #transcription {
+            white-space: pre-wrap;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            min-height: 100px;
+        }
+        .recording {
+            background-color: #ffebee;
+        }
+    </style>
+</head>
+<body>
+    <h1>Распознавание речи через WebSocket</h1>
+    
+    <div class="controls">
+        <button id="startBtn">Начать запись</button>
+        <button id="stopBtn" disabled>Остановить запись</button>
+    </div>
+    
+    <div id="status"></div>
+    <div id="transcription"></div>
+
+    <script>
+        let websocket;
+        let mediaRecorder;
+        let audioChunks = [];
+        const statusDiv = document.getElementById('status');
+        const transcriptionDiv = document.getElementById('transcription');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        // Подключение к WebSocket серверу
+        function connectWebSocket() {
+            websocket = new WebSocket('ws://localhost:8765');
+            
+            websocket.onopen = () => {
+                updateStatus('Подключено к серверу', 'green');
+                startBtn.disabled = false;
+            };
+            
+            websocket.onclose = () => {
+                updateStatus('Отключено от сервера', 'red');
+                startBtn.disabled = true;
+                stopBtn.disabled = true;
+            };
+            
+            websocket.onmessage = (event) => {
+                const result = JSON.parse(event.data);
+                transcriptionDiv.textContent = result.text;
+            };
+            
+            websocket.onerror = (error) => {
+                updateStatus('Ошибка соединения', 'red');
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        // Обновление статуса на странице
+        function updateStatus(message, color) {
+            statusDiv.textContent = message;
+            statusDiv.style.backgroundColor = color === 'green' ? '#e8f5e9' : '#ffebee';
+        }
+
+        // Начало записи
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: 'audio/webm'
+                });
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    
+                    // Конвертация в WAV
+                    const audioContext = new AudioContext();
+                    const audioData = await audioBlob.arrayBuffer();
+                    const audioBuffer = await audioContext.decodeAudioData(audioData);
+                    
+                    // Ресемплинг до 16кГц
+                    const offlineContext = new OfflineAudioContext(1, audioBuffer.duration * 16000, 16000);
+                    const source = offlineContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(offlineContext.destination);
+                    source.start();
+                    
+                    const renderedBuffer = await offlineContext.startRendering();
+                    const wavData = new Float32Array(renderedBuffer.length);
+                    renderedBuffer.copyFromChannel(wavData, 0);
+                    
+                    // Конвертация в 16-бит Int
+                    const pcmData = new Int16Array(wavData.length);
+                    for (let i = 0; i < wavData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, wavData[i]));
+                        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    
+                    websocket.send(pcmData.buffer);
+                };
+
+                mediaRecorder.start(1000);  // Отправка чанков каждую секунду
+                document.body.classList.add('recording');
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                updateStatus('Идёт запись...', 'green');
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                updateStatus('Ошибка доступа к микрофону', 'red');
+            }
+        }
+
+        // Остановка записи
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                document.body.classList.remove('recording');
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                updateStatus('Запись остановлена', 'green');
+            }
+        }
+
+        // Обработчики событий кнопок
+        startBtn.onclick = startRecording;
+        stopBtn.onclick = stopRecording;
+
+        // Подключаемся при загрузке страницы
+        connectWebSocket();
+    </script>
+</body>
+</html>
