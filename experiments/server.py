@@ -1,111 +1,97 @@
-# server.py
 import asyncio
-import json
-import logging
-import os
-import uuid
-from datetime import datetime
-import wave
+from typing import Tuple
 
-import websockets
+import numpy as np
+import uvicorn
+from fastapi import Depends, FastAPI, Request
 from faster_whisper import WhisperModel
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+app = FastAPI()
 
-class AudioTranscriptionServer:
-    """
-    Сервер для транскрибации аудио через WebSocket соединение.
-    Использует faster-whisper для распознавания речи в реальном времени.
-    """
-    
-    def __init__(self, host="localhost", port=8765):
-        self.host = host
-        self.port = port
-        self.connected_clients = {}
-        
-        # Инициализация модели Whisper
-        logger.info("Инициализация модели Whisper...")
-        self.model = WhisperModel("large-v3", device="cuda", compute_type="float16")
-        logger.info("Модель Whisper загружена успешно")
+MODEL_TYPE = "large-v2"
+RUN_TYPE = "cpu"  # "cpu" or "gpu"
 
-    async def save_audio(self, audio_data, client_id):
-        """Сохраняет аудио во временный WAV файл"""
-        filename = f"temp_{client_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
-        
-        with wave.open(filename, 'wb') as wav_file:
-            wav_file.setnchannels(1)  # Моно
-            wav_file.setsampwidth(2)  # 16 бит
-            wav_file.setframerate(16000)  # 16кГц
-            wav_file.writeframes(audio_data)
-        
-        return filename
+# For CPU usage (https://github.com/SYSTRAN/faster-whisper/issues/100#issuecomment-1492141352)
+NUM_WORKERS = 10
+CPU_THREADS = 4
 
-    async def transcribe_audio(self, filename):
-        """Транскрибация аудио с помощью Whisper"""
-        logger.info(f"Начало транскрибации файла {filename}")
-        segments, info = self.model.transcribe(filename, beam_size=5)
-        segments = list(segments)  # Запуск транскрибации
-        
-        text = " ".join([s.text for s in segments])
-        logger.info(f"Транскрибация завершена: {text[:50]}...")
-        
-        return {
-            "text": text,
-            "language": info.language,
-            "language_probability": info.language_probability
-        }
+# For GPU usage
+GPU_DEVICE_INDICES = [0]
 
-    async def handle_client(self, websocket, client_id):
-        """Обработка подключения клиента"""
-        try:
-            while True:
-                message = await websocket.recv()
-                
-                if isinstance(message, bytes):
-                    # Сохраняем аудио
-                    filename = await self.save_audio(message, client_id)
-                    logger.info(f"Сохранено аудио: {filename}")
-                    
-                    # Транскрибируем
-                    result = await self.transcribe_audio(filename)
-                    
-                    # Отправляем результат
-                    await websocket.send(json.dumps(result))
-                    
-                    # Удаляем временный файл
-                    os.remove(filename)
-                    logger.info(f"Удален временный файл: {filename}")
-                    
-        except websockets.exceptions.ConnectionClosed:
-            logger.info(f"Клиент отключился: {client_id}")
-        except Exception as e:
-            logger.error(f"Ошибка при обработке клиента {client_id}: {str(e)}")
+VAD_FILTER = True
 
-    async def handle_connection(self, websocket, path):
-        """Обработка нового подключения"""
-        client_id = str(uuid.uuid4())
-        logger.info(f"Новое подключение: {client_id}")
-        
-        self.connected_clients[client_id] = websocket
-        try:
-            await self.handle_client(websocket, client_id)
-        finally:
-            del self.connected_clients[client_id]
 
-    async def start(self):
-        """Запуск сервера"""
-        server = await websockets.serve(self.handle_connection, self.host, self.port)
-        logger.info(f"Сервер запущен на ws://{self.host}:{self.port}")
-        return server
+def create_whisper_model() -> WhisperModel:
+    if RUN_TYPE.lower() == "gpu":
+        whisper = WhisperModel(MODEL_TYPE,
+                               device="cuda",
+                               compute_type="float16",
+                               device_index=GPU_DEVICE_INDICES,
+                               download_root="./models")
+    elif RUN_TYPE.lower() == "cpu":
+        whisper = WhisperModel(MODEL_TYPE,
+                               device="cpu",
+                               compute_type="int8",
+                               num_workers=NUM_WORKERS,
+                               cpu_threads=CPU_THREADS,
+                               download_root="./models")
+    else:
+        raise ValueError(f"Invalid model type: {RUN_TYPE}")
 
-# main.py
+    print("Loaded model")
+
+    return whisper
+
+
+model = create_whisper_model()
+print("Loaded model")
+
+
+async def parse_body(request: Request):
+    data: bytes = await request.body()
+    return data
+
+
+def execute_blocking_whisper_prediction(
+        model: WhisperModel,
+        audio_data_array: np.ndarray,
+        language_code: str = "") -> Tuple[str, str, float]:
+    language_code = language_code.lower().strip()
+    segments, info = model.transcribe(
+        audio_data_array,
+        language=language_code if language_code != "" else None,
+        beam_size=5,
+        vad_filter=VAD_FILTER,
+        vad_parameters=dict(min_silence_duration_ms=500))
+    segments = [s.text for s in segments]
+    transcription = " ".join(segments)
+    transcription = transcription.strip()
+    return transcription, info.language, info.language_probability
+
+
+@app.post("/predict")
+async def predict(
+        audio_data: bytes = Depends(parse_body), language_code: str = ""):
+    # Convert the audio bytes to a NumPy array
+    audio_data_array: np.ndarray = np.frombuffer(audio_data, np.int16).astype(
+        np.float32) / 255.0
+
+    try:
+        # Run the prediction on the audio data
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, execute_blocking_whisper_prediction, model, audio_data_array,
+            language_code)
+
+    except Exception as e:
+        print(e)
+        result = "Error"
+
+    return {
+        "prediction": result[0],
+        "language": result[1],
+        "language_probability": result[2]
+    }
+
+
 if __name__ == "__main__":
-    server = AudioTranscriptionServer()
-    asyncio.get_event_loop().run_until_complete(server.start())
-    asyncio.get_event_loop().run_forever()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
