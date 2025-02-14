@@ -1,2 +1,5 @@
+pyaudio
 faster-whisper
-websockets
+gradio
+librosa
+tabulate
