@@ -17,13 +17,13 @@ load_dotenv()
 #                              CSS и тема оформления
 # -----------------------------------------------------------------------------
 custom_css = """
-.transcription_display_container {
+.transcription_display_container, .auto_translation_display_container {
     max-height: 500px;
-    overflow-y: scroll
+    overflow-y: scroll;
 }
 
 footer {
-    visibility: hidden
+    visibility: hidden;
 }
 
 label {
@@ -52,7 +52,11 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> str:
     api_key = os.getenv("PROXY_API_KEY")
     url = "https://api.proxyapi.ru/google/v1/models/gemini-1.5-pro:generateContent"
 
-    prompt = f"Переведи с {source_lang} на {target_lang}: {text}. В ответе только текст без доп символов."
+    prompt = f"""
+    Ты переводишь транскрипты записей речи. Переведи с {source_lang} на {target_lang}: 
+    ```{text}```. 
+    Постарайся не вносить свои смыслы в текст. В ответе только текст без доп символов.
+    """
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -149,28 +153,23 @@ def _reset_button_click(
     stream_state: np.ndarray,
     latency_data_state: dict,
     transcription_history_state: list,
-    current_transcription_state: str
-) -> Tuple[None, None, list, str, str, str, str]:
+    current_transcription_state: str,
+    auto_translation_history_state: list
+) -> Tuple[None, None, list, str, str, str, str, str, list]:
     """
-    Сбрасывает все состояния, связанные с транскрипцией.
+    Сбрасывает все состояния, связанные с транскрипцией и авто-переводом.
 
     Аргументы:
-        stream_state (np.ndarray | None): Текущий накопленный аудиопоток.
+        stream_state (np.ndarray | None): Текущий аудиопоток.
         latency_data_state (dict | None): Данные о задержке.
-        transcription_history_state (list): История предыдущих транскрипций.
+        transcription_history_state (list): История транскрипций.
         current_transcription_state (str): Текущий текст транскрипции.
+        auto_translation_history_state (list): История авто-переводов.
 
     Возвращает:
-        Tuple[None, None, list, str, str, str, str]:
-            - None: Сброшенное состояние аудиопотока.
-            - None: Сброшенное состояние данных о задержке.
-            - list: Пустой список истории.
-            - str: Пустая строка текущей транскрипции.
-            - str: Пустая строка для информации об определённом языке.
-            - str: Пустая HTML-строка транскрипции.
-            - str: Пустая строка для авто-перевода.
+        Tuple: Кортеж с новыми значениями состояний.
     """
-    return None, None, [], "", "", "", ""
+    return (None, None, [], "", "", "", "", "", [])
 
 
 def apply_text_size(text: str, size: str) -> str:
@@ -199,7 +198,8 @@ def dummy_function(
     font_size: str,
     source_lang: str,
     target_lang: str,
-    auto_translate_checked: bool
+    auto_translate_checked: bool,
+    auto_translation_history: list
 ) -> Tuple[
     np.ndarray,
     str,
@@ -208,36 +208,32 @@ def dummy_function(
     str,
     list,
     str,
-    str
+    str,
+    str,
+    list
 ]:
     """
     Обрабатывает поток аудиоданных, выполняет транскрипцию с перекрытием между чанками,
     собирает статистику задержек, управляет историей транскрипций и выполняет авто-перевод.
+    При авто-переводе переводится только та строка, которая только что была зафиксирована и ушла в историю.
 
     Аргументы:
-        stream (np.ndarray | None): Текущий накопленный аудиопоток или None, если он ещё не создан.
+        stream (np.ndarray | None): Текущий накопленный аудиопоток или None.
         new_chunk (Tuple[int, np.ndarray]): Кортеж вида (частота дискретизации, массив семплов).
-        max_length (int): Максимальная длина аудио (в секундах) перед разбиением на части.
-        overlap_duration (float): Длительность перекрытия (в секундах) между последовательными чанками.
-        latency_data (dict | None): Словарь, содержащий списки задержек для этапов обработки.
+        max_length (int): Максимальная длина аудио (сек) перед разбиением на части.
+        overlap_duration (float): Длительность перекрытия (сек) между чанками.
+        latency_data (dict | None): Данные о задержках.
         current_transcription (str): Текущий буфер транскрипции.
-        transcription_history (list): История ранее полученных транскрипций.
+        transcription_history (list): История транскрипций.
         language_code (str): Код языка для подсказки модели.
-        font_size (str): Размер шрифта для отображения транскрипции.
-        source_lang (str): Исходный язык для перевода (если не указан, будет определён автоматически).
+        font_size (str): Размер шрифта для отображения.
+        source_lang (str): Исходный язык для перевода.
         target_lang (str): Целевой язык для перевода.
         auto_translate_checked (bool): Флаг авто-перевода.
+        auto_translation_history (list): История авто-переводов.
 
     Возвращает:
-        Tuple[np.ndarray, str, str, dict, str, list, str, str]:
-            - Обновлённый аудиопоток (либо его оставшаяся часть с перекрытием).
-            - HTML-строка с актуальной транскрипцией с учётом font_size.
-            - HTML-таблица со статистикой задержек.
-            - Обновлённый словарь задержек.
-            - Текущий буфер транскрипции.
-            - История транскрипций.
-            - Строка с информацией об определённом языке и его вероятности.
-            - Результат авто-перевода (если авто-перевод включён, иначе пустая строка).
+        Tuple: Обновленные состояния и HTML-отображения для транскрипции и авто-перевода.
     """
     start_time = time.time()
 
@@ -252,7 +248,7 @@ def dummy_function(
     sampling_rate, y = new_chunk
     y = y.astype(np.float32)
 
-    # Добавляем новый фрагмент к текущему потоку или создаём новый поток
+    # Добавляем новый фрагмент к текущему потоку или создаём новый
     if stream is not None:
         stream = np.concatenate([stream, y])
     else:
@@ -292,25 +288,26 @@ def dummy_function(
     total_latency = end_time - start_time
     latency_data["total_latency"].append(total_latency)
 
-    # Выравниваем длину всех списков в latency_data, дополняя недостающие элементы нулями
+    # Выравниваем длину всех списков в latency_data
     max_len = max(len(lst) for lst in latency_data.values())
     for key in latency_data:
         while len(latency_data[key]) < max_len:
             latency_data[key].append(0.0)
 
-    # Если длина потока превышает max_length, сохраняем транскрипцию и оставляем перекрытие для следующей части
+    # Если длина потока превышает max_length, сохраняем транскрипцию и оставляем перекрытие
+    finalized_line = None
     if len(stream) > sampling_rate * max_length:
+        finalized_line = current_transcription  # строка, которая только что ушла вниз
         transcription_history.append(current_transcription)
-        # Вычисляем количество семплов, соответствующих длительности перекрытия
         overlap_samples = int(overlap_duration * sampling_rate)
         stream = stream[-overlap_samples:]
         current_transcription = ""
 
-    # Формируем отображаемый текст: текущая транскрипция + история (с обратным порядком)
+    # Формируем отображаемый текст транскрипции: текущий буфер + история (обратный порядок)
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
     transcription_html = apply_text_size(display_text, font_size)
 
-    # Подготавливаем таблицу статистики задержек (переводим секунды в миллисекунды)
+    # Подготавливаем таблицу статистики задержек (в миллисекундах)
     info_df = pd.DataFrame(latency_data)
     info_df = info_df.apply(lambda x: x * 1000)
     info_df = info_df.describe().loc[["min", "max", "mean"]]
@@ -323,24 +320,33 @@ def dummy_function(
 
     language_and_pred_text = f"Predicted Language: {language} ({language_pred * 100:.2f}%)"
 
-    # Выполнение авто-перевода только если включён чекбокс
-    new_source_lang = language if not source_lang else source_lang
-    translation = ""
-    if auto_translate_checked:
+    # Выполнение авто-перевода только для финализированной строки
+    # (т.е. только если завершился один из чанков)
+    if auto_translate_checked and finalized_line is not None:
         try:
-            translation = translate_text(transcription, new_source_lang, target_lang)
+            auto_translated_line = translate_text(finalized_line, language if not source_lang else source_lang, target_lang)
+            auto_translation_history.append(auto_translated_line)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Auto translation error: {e}")
+
+    # Формируем HTML для истории авто-перевода (с обратным порядком)
+    auto_translation_display = "\n\n" + "\n".join(auto_translation_history[::-1])
+    auto_translation_html = apply_text_size(auto_translation_display, font_size)
+
+    # В данной функции ручной перевод не вычисляется – он вызывается отдельно
+    manual_translation = ""
 
     return (
-        stream,
-        transcription_html,
-        info_df_html,
-        latency_data,
-        current_transcription,
-        transcription_history,
-        language_and_pred_text,
-        translation
+        stream,                      # обновлённый аудиопоток
+        transcription_html,          # HTML транскрипции
+        info_df_html,                # статистика задержек (HTML)
+        latency_data,                # обновлённые данные задержек
+        current_transcription,       # текущий буфер транскрипции
+        transcription_history,       # история транскрипций
+        language_and_pred_text,      # информация о языке
+        manual_translation,          # ручной перевод (пустая строка здесь)
+        auto_translation_html,       # HTML авто-перевода
+        auto_translation_history     # обновлённая история авто-перевода
     )
 
 
@@ -359,20 +365,21 @@ with gr.Blocks(
     latency_data_state = gr.State(None)
     transcription_history_state = gr.State([])
     current_transcription_state = gr.State("")
+    auto_translation_history_state = gr.State([])
 
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     #                           БЛОК ЖИВОЙ ТРАНСКРИПЦИИ
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Живая транскрипция")
         with gr.Accordion(label="Как использовать", open=False):
             gr.Markdown("""
-**1.** Нажмите **Start** и разрешите доступ к микрофону.
-**2.** Выберите язык (или оставьте Auto detect).
-**3.** Настройте максимальную длину аудио и длительность перекрытия между чанками.
-**4.** Нажмите **Stop**, чтобы остановить запись.
-**5.** Чтобы очистить данные и начать заново, нажмите **Reset**.
-**6.** Для автоматического перевода новых строк установите галочку **Авто-перевод**.
+**1.** Нажмите **Start** и разрешите доступ к микрофону.  
+**2.** Выберите язык (или оставьте Auto detect).  
+**3.** Настройте максимальную длину аудио и длительность перекрытия между чанками.  
+**4.** Нажмите **Stop**, чтобы остановить запись.  
+**5.** Чтобы очистить данные и начать заново, нажмите **Reset**.  
+**6.** Для автоматического перевода новых строк установите галочку **Авто-перевод**.  
 **7.** Для ручного перевода всего текста используйте блок справа.
             """)
 
@@ -391,14 +398,14 @@ with gr.Blocks(
                 multiselect=False
             )
             max_length_input = gr.Slider(
-                value=9,
+                value=7,
                 minimum=2,
                 maximum=30,
                 step=1,
                 label="Длина одного чанка (сек)"
             )
             overlap_slider = gr.Slider(
-                value=3.0,
+                value=2.0,
                 minimum=0.0,
                 maximum=5.0,
                 step=0.1,
@@ -406,9 +413,10 @@ with gr.Blocks(
             )
             reset_button = gr.Button("Reset")
 
+        # Ряд, где слева отображается транскрипция, а справа – автоматический перевод
         with gr.Row():
             transcription_html = gr.HTML(label="Транскрипция", elem_id="transcription_display_container")
-            info_table_output = gr.HTML(label="Статистика задержек")
+            auto_translation_html = gr.HTML(label="Автоматический перевод", elem_id="auto_translation_display_container")
 
         # Вывод информации о языке
         transcription_language_prod_output = gr.Text(
@@ -417,23 +425,25 @@ with gr.Blocks(
             interactive=False
         )
 
-        # Чекбокс для авто-перевода (включается, если нужно переводить каждую новую строку)
-        auto_translate_checkbox = gr.Checkbox(label="Авто-перевод", value=False, interactive=True)
+        with gr.Row():
+            auto_translate_checkbox = gr.Checkbox(label="Авто-перевод", value=False, interactive=True)
+            font_size_dropdown = gr.Dropdown(
+                [
+                    "8px", "10px", "12px", "14px", "16px",
+                    "18px", "20px", "24px", "36px", "48px"
+                ],
+                value="14px",
+                label="Размер шрифта",
+                multiselect=False
+            )
 
-        # Слайдер изменения размера текста для транскрипции
-        font_size_dropdown = gr.Dropdown(
-            [
-                "8px", "10px", "12px", "14px", "16px",
-                "18px", "20px", "24px", "36px", "48px"
-            ],
-            value="14px",
-            label="Размер шрифта",
-            multiselect=False
-        )
+        # Блок статистики задержек перемещён вниз
+        with gr.Row():
+            info_table_output = gr.HTML(label="Статистика задержек")
 
-    # -----------------------------------------------------------------------------
-    #                           БЛОК ПЕРЕВОДА ТЕКСТА
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    #                           БЛОК ПЕРЕВОДА ТЕКСТА (РУЧНОЙ)
+    # -------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Перевод текста")
         with gr.Row():
@@ -460,14 +470,14 @@ with gr.Blocks(
                     ("Hungarian", "hu"),
                     ("Russian", "ru")
                 ],
-                value="ru",
+                value="en",
                 label="Целевой язык",
                 multiselect=False
             )
         translate_button = gr.Button("Перевести")
         output_text = gr.Textbox(
             lines=5,
-            label="Переведённый текст",
+            label="Переведённый текст (ручной перевод)",
             interactive=False
         )
 
@@ -478,9 +488,9 @@ with gr.Blocks(
             outputs=output_text
         )
 
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     #                           БЛОК ТЕКСТ В РЕЧЬ
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Текст в речь")
         with gr.Row():
@@ -505,47 +515,51 @@ with gr.Blocks(
             outputs=[loaded_audio_display]
         )
 
-    # -----------------------------------------------------------------------------
-    #                           СВЯЗИ МЕЖДУ КОМПОНЕНТАМИ
-    # -----------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    #                      СВЯЗИ МЕЖДУ КОМПОНЕНТАМИ
+    # -------------------------------------------------------------------------
     # Потоковая функция для записи/транскрипции с авто-переводом
     mic_audio_input.stream(
         fn=dummy_function,
         inputs=[
-            stream_state,              # Текущее состояние аудиопотока
-            mic_audio_input,           # Входные аудио-данные
-            max_length_input,          # Максимальная длина аудио (сек)
-            overlap_slider,            # Длительность перекрытия между чанками (сек)
-            latency_data_state,        # Статистика задержек
+            stream_state,              # текущий аудиопоток
+            mic_audio_input,           # новые аудиоданные
+            max_length_input,          # длина чанка (сек)
+            overlap_slider,            # перекрытие (сек)
+            latency_data_state,        # данные задержек
             current_transcription_state,
             transcription_history_state,
             language_code_input,
             font_size_dropdown,
-            source_lang,               # Исходный язык (из блока перевода)
-            target_lang,               # Целевой язык (из блока перевода)
-            auto_translate_checkbox    # Чекбокс авто-перевода
+            source_lang,               # исходный язык для перевода
+            target_lang,               # целевой язык для перевода
+            auto_translate_checkbox,   # авто-перевод включён/выключён
+            auto_translation_history_state  # история авто-перевода
         ],
         outputs=[
-            stream_state,                      # Обновлённый аудиопоток
-            transcription_html,                # HTML с транскрипцией
-            info_table_output,                 # Статистика задержек
-            latency_data_state,                # Обновлённый словарь задержек
-            current_transcription_state,       # Текущий буфер транскрипции
-            transcription_history_state,       # История транскрипций
-            transcription_language_prod_output,# Информация о языке
-            output_text                        # Авто-перевод (вывод в том же окне, что и ручной перевод)
+            stream_state,                      # обновлённый аудиопоток
+            transcription_html,                # HTML транскрипции
+            info_table_output,                 # статистика задержек (HTML)
+            latency_data_state,                # обновлённые данные задержек
+            current_transcription_state,       # текущий буфер транскрипции
+            transcription_history_state,       # история транскрипций
+            transcription_language_prod_output,# информация о языке
+            output_text,                       # ручной перевод (оставляем пустым в потоке)
+            auto_translation_html,             # HTML авто-перевода
+            auto_translation_history_state     # обновлённая история авто-перевода
         ],
         show_progress="hidden"
     )
 
-    # Привязка кнопки для сброса состояний
+    # Привязка кнопки для сброса состояний (сбросим и историю авто-перевода)
     reset_button.click(
         _reset_button_click,
         inputs=[
             stream_state,
             latency_data_state,
             transcription_history_state,
-            current_transcription_state
+            current_transcription_state,
+            auto_translation_history_state
         ],
         outputs=[
             stream_state,
@@ -554,7 +568,9 @@ with gr.Blocks(
             current_transcription_state,
             transcription_language_prod_output,
             transcription_html,
-            output_text
+            output_text,
+            auto_translation_html,
+            auto_translation_history_state
         ]
     )
 
