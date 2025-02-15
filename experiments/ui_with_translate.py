@@ -148,7 +148,7 @@ def dummy_function(stream, new_chunk, max_length, latency_data, current_transcri
         current_transcription = ""
 
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
-    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)"
+    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)", f"{language_pred * 100:.2f}%"
 
 
 def _reset_button_click(stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state):
@@ -157,7 +157,7 @@ def _reset_button_click(stream_state, transcription_display, latency_data_state,
 
     :return: Начальные значения состояний.
     """
-    return None, "", None, [], "", ""
+    return None, "", None, [], "", "", ""
 
 
 # Создание интерфейса Gradio с двумя основными блоками: транскрипция (и TTS) слева и перевод справа
@@ -170,66 +170,82 @@ with gr.Blocks() as demo:
     transcription_history_state = gr.State([])
     current_transcription_state = gr.State("")
 
-    # Интерфейс разделён на два столбца
-    with gr.Row():
-        # Левый столбец: Живая транскрипция и текст в речь
-        with gr.Column():
-            gr.Markdown("## Живая транскрипция")
-            with gr.Accordion(label="Как использовать", open=False):
-                gr.Markdown("""
+    with gr.Column():
+        #Строка с записью аудио
+        gr.Markdown("## Живая транскрипция")
+        with gr.Accordion(label="Как использовать", open=False):
+            gr.Markdown("""
 ### Инструкция по использованию сервиса живой транскрипции:
 1. **Нажмите 'Start'** и разрешите доступ к микрофону.
 2. **Выберите язык** (или оставьте автоопределение).
 3. **Нажмите 'Stop'** для завершения и 'Reset' для сброса.
 4. **Используйте перевод** во втором столбце, выбрав целевой язык.
 """)
-            with gr.Row():
-                mic_audio_input = gr.Audio(sources=["microphone"], streaming=True, label="Микрофон")
-                reset_button = gr.Button("Reset")
-                max_length_input = gr.Slider(value=10, minimum=2, maximum=30, step=1, label="Максимальная длина аудио (сек)")
-                language_code_input = gr.Dropdown(
-                    [("Auto detect", ""), ("English", "en"), ("Spanish", "es"),
-                     ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
-                     ("Russian", "ru")],
-                    value="", label="Код языка", multiselect=False
-                )
-            gr.Markdown("### Транскрипция")
+        with gr.Row():
+            mic_audio_input = gr.Audio(sources=["microphone"], streaming=True, label="Микрофон")
+            reset_button = gr.Button("Reset")
+            max_length_input = gr.Slider(value=10, minimum=2, maximum=30, step=1, label="Максимальная длина аудио (сек)")
+            language_code_input = gr.Dropdown(
+                [("Auto detect", ""), ("English", "en"), ("Spanish", "es"),
+                    ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
+                    ("Russian", "ru")],
+                value="", label="Код языка", multiselect=False
+            )
+    # Интерфейс разделён на два столбца
+    with gr.Row():
+        # Левый столбец: Живая транскрипция и текст в речь
+        with gr.Column():
+            gr.Markdown("## Транскрипция")
             transcription_language_prod_output = gr.Text(lines=1, show_label=False, interactive=False)
             transcription_display = gr.Textbox(lines=5, show_label=False, interactive=False, show_copy_button=True)
+            translate_button = gr.Button("Перевести")
 
-            gr.Markdown("## Текст в речь")
-            load_audio_button = gr.Button("Преобразовать текст в речь")
-            with gr.Row():
-                tts_text_box = gr.Textbox(label="Текст")
-                tts_lanuage_code = gr.Dropdown(
-                    [("Auto detect", ""), ("English", "en"), ("Spanish", "es"),
-                     ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
-                     ("Russian", "ru")],
-                    value="", label="Код языка", multiselect=False
-                )
-            loaded_audio_display = gr.Audio(label="Аудиофайл", interactive=False)
+            
 
         # Правый столбец: Перевод текста
         with gr.Column():
             gr.Markdown("## Перевод текста")
-            text_input = gr.Textbox(label="Введите текст")
-            source_lang = gr.Textbox(label="Исходный язык (например, ru)")
-            target_lang = gr.Textbox(label="Целевой язык (например, en)")
-            translate_button = gr.Button("Перевести")
-            output_text = gr.Textbox(label="Переведённый текст")
+            output_text = gr.Textbox(lines=5, label="Переведённый текст", interactive=False)
+            with gr.Row():
+                source_lang = gr.Dropdown(
+                        [("Auto detect", ""), ("English", "en"), ("Spanish", "es"),
+                        ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
+                        ("Russian", "ru")],
+                        value="", label="Исходный язык", multiselect=False
+                    )
+                target_lang = gr.Dropdown(
+                        [("English", "en"), ("Spanish", "es"),
+                        ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
+                        ("Russian", "ru")],
+                        value="ru", label="Целевой язык", multiselect=False
+                    )
+
 
             # Привязка кнопки перевода к функции перевода
             translate_button.click(translate_interface,
-                                   inputs=[text_input, source_lang, target_lang],
+                                   inputs=[transcription_display, source_lang, target_lang],
                                    outputs=output_text)
 
+    with gr.Column():
+        gr.Markdown("## Текст в речь")
+        load_audio_button = gr.Button("Преобразовать текст в речь")
+        with gr.Row():
+            tts_text_box = gr.Textbox(label="Текст")
+            tts_lanuage_code = gr.Dropdown(
+                [("Auto detect", ""), ("English", "en"), ("Spanish", "es"),
+                    ("Italian", "it"), ("German", "de"), ("Hungarian", "hu"), 
+                    ("Russian", "ru")],
+                value="", label="Код языка", multiselect=False
+            )
+        loaded_audio_display = gr.Audio(label="Аудиофайл", interactive=False)
+    
     # Привязка аудио потока к функции обработки транскрипции
     mic_audio_input.stream(
         dummy_function,
         inputs=[stream_state, mic_audio_input, max_length_input, latency_data_state,
                 current_transcription_state, transcription_history_state, language_code_input],
         outputs=[stream_state, transcription_display, latency_data_state, current_transcription_state,
-                 transcription_history_state, transcription_language_prod_output],
+                 transcription_history_state, transcription_language_prod_output, source_lang],
         show_progress="hidden"
     )
 
@@ -237,7 +253,7 @@ with gr.Blocks() as demo:
     reset_button.click(
         _reset_button_click,
         inputs=[stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state],
-        outputs=[stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state, transcription_language_prod_output]
+        outputs=[stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state, transcription_language_prod_output, source_lang]
     )
 
     # Привязка кнопки преобразования текста в речь к соответствующей функции
