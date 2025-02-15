@@ -15,8 +15,10 @@ LENGHT_IN_SEC: int = 6  # We'll process this amount of audio data together maxim
 TRANSCRIPTION_API_ENDPOINT = "http://localhost:8000/predict"
 
 
-def send_audio_to_server(audio_data: np.ndarray,
-                         language_code: str = "") -> Tuple[str, str, float]:
+def send_audio_to_server(
+        audio_data: np.ndarray,
+        language_code: str = ""
+    ) -> Tuple[str, str, float]:
     # This is how the server expects the data
     audio_data_bytes = audio_data.astype(np.int16).tobytes()
 

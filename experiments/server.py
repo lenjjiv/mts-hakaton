@@ -9,7 +9,7 @@ from faster_whisper import WhisperModel
 app = FastAPI()
 
 MODEL_TYPE = "large-v2"
-RUN_TYPE = "cpu"  # "cpu" or "gpu"
+RUN_TYPE = "gpu"  # "cpu" or "gpu"
 
 # For CPU usage (https://github.com/SYSTRAN/faster-whisper/issues/100#issuecomment-1492141352)
 NUM_WORKERS = 10
@@ -20,21 +20,24 @@ GPU_DEVICE_INDICES = [0]
 
 VAD_FILTER = True
 
-
 def create_whisper_model() -> WhisperModel:
     if RUN_TYPE.lower() == "gpu":
-        whisper = WhisperModel(MODEL_TYPE,
-                               device="cuda",
-                               compute_type="float16",
-                               device_index=GPU_DEVICE_INDICES,
-                               download_root="./models")
+        whisper = WhisperModel(
+            MODEL_TYPE,
+            device="cuda",
+            compute_type="float16",
+            device_index=GPU_DEVICE_INDICES,
+            download_root="./models"
+        )
+
     elif RUN_TYPE.lower() == "cpu":
         whisper = WhisperModel(MODEL_TYPE,
-                               device="cpu",
-                               compute_type="int8",
-                               num_workers=NUM_WORKERS,
-                               cpu_threads=CPU_THREADS,
-                               download_root="./models")
+            device="cpu",
+            compute_type="int8",
+            num_workers=NUM_WORKERS,
+            cpu_threads=CPU_THREADS,
+            download_root="./models"
+        )
     else:
         raise ValueError(f"Invalid model type: {RUN_TYPE}")
 
