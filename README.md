@@ -3,7 +3,7 @@
 ---
 
 - [Сайт с заданиями]()
-
+- [Базовый репозиторий, с которого взят фронт](https://github.com/gaborvecsei/whisper-live-transcription)
 - [Coqui TTS примеры (Google Colab)](https://colab.research.google.com/github/snakers4/silero-models/blob/master/examples_tts.ipynb#scrollTo=stupid-naples)
 
 ---
