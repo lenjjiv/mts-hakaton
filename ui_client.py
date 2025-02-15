@@ -189,6 +189,7 @@ def dummy_function(
     stream: np.ndarray,
     new_chunk: Tuple[int, np.ndarray],
     max_length: int,
+    overlap_duration: float,
     latency_data: dict,
     current_transcription: str,
     transcription_history: list,
@@ -204,27 +205,29 @@ def dummy_function(
     str
 ]:
     """
-    Обрабатывает поток аудиоданных, выполняет транскрипцию, ведёт статистику задержек и управляет историей транскрипций.
+    Обрабатывает поток аудиоданных, выполняет транскрипцию с перекрытием между чанками,
+    собирает статистику задержек и управляет историей транскрипций.
 
     Аргументы:
         stream (np.ndarray | None): Текущий накопленный аудиопоток или None, если он ещё не создан.
-        new_chunk (Tuple[int, np.ndarray]): Кортеж вида (частота_дискретизации, массив_семплов).
-        max_length (int): Максимальная длина аудио в секундах перед сбросом потока.
-        latency_data (dict | None): Словарь, содержащий массивы задержек различных этапов обработки.
-        current_transcription (str): Текущая транскрипция (буфер).
-        transcription_history (list): История предыдущих транскрипций.
-        language_code (str): Код языка для подсказки распознаванию.
-        font_size (str): Текущий размер шрифта (например, '14px').
+        new_chunk (Tuple[int, np.ndarray]): Кортеж вида (частота дискретизации, массив семплов).
+        max_length (int): Максимальная длина аудио (в секундах) перед разбиением на части.
+        overlap_duration (float): Длительность перекрытия (в секундах) между последовательными чанками.
+        latency_data (dict | None): Словарь, содержащий списки задержек для этапов обработки.
+        current_transcription (str): Текущий буфер транскрипции.
+        transcription_history (list): История ранее полученных транскрипций.
+        language_code (str): Код языка для подсказки модели.
+        font_size (str): Размер шрифта для отображения транскрипции.
 
     Возвращает:
         Tuple[np.ndarray, str, str, dict, str, list, str]:
-            - np.ndarray: Обновлённый аудиопоток (или None, если он сброшен).
-            - str: HTML-строка с актуальной транскрипцией (учитывая font_size).
-            - str: HTML-таблица со статистикой задержек.
-            - dict: Обновлённый словарь latency_data.
-            - str: Текущая транскрипция (буфер).
-            - list: Обновлённая история транскрипций.
-            - str: Строка с определённым языком и его вероятностью.
+            - Обновлённый аудиопоток (либо его оставшаяся часть с перекрытием).
+            - HTML-строка с актуальной транскрипцией с учётом font_size.
+            - HTML-таблица со статистикой задержек.
+            - Обновлённый словарь задержек.
+            - Текущий буфер транскрипции.
+            - История транскрипций.
+            - Строка с информацией об определённом языке и его вероятности.
     """
     start_time = time.time()
 
@@ -239,7 +242,7 @@ def dummy_function(
     sampling_rate, y = new_chunk
     y = y.astype(np.float32)
 
-    # Добавляем новый фрагмент к текущему потоку или создаём поток
+    # Добавляем новый фрагмент к текущему потоку или создаём новый поток
     if stream is not None:
         stream = np.concatenate([stream, y])
     else:
@@ -249,41 +252,57 @@ def dummy_function(
     language = "ERROR"
     language_pred = 0.0
 
-    # Выполняем ресемплинг и транскрипцию
     try:
+        # Ресэмплинг аудио до 16000 Гц
         sampling_start_time = time.time()
         stream_resampled = librosa.resample(stream, orig_sr=sampling_rate, target_sr=16000)
         sampling_end_time = time.time()
-        latency_data["total_resampling_latency"].append(sampling_end_time - sampling_start_time)
+        sampling_latency = sampling_end_time - sampling_start_time
+        latency_data["total_resampling_latency"].append(sampling_latency)
 
+        # Транскрипция аудио через сервер
         transcription_start_time = time.time()
         if isinstance(language_code, list):
             language_code = language_code[0] if len(language_code) > 0 else ""
         transcription, language, language_pred = send_audio_to_server(stream_resampled, str(language_code))
         current_transcription = f"{transcription}"
         transcription_end_time = time.time()
-        latency_data["total_transcription_latency"].append(transcription_end_time - transcription_start_time)
-
+        transcription_latency = transcription_end_time - transcription_start_time
+        latency_data["total_transcription_latency"].append(transcription_latency)
     except Exception as e:
         print(f"Ошибка при транскрипции: {e}")
+        # В случае ошибки добавляем значения по умолчанию для выравнивания списков задержек
+        latency_data["total_resampling_latency"].append(0.0)
+        latency_data["total_transcription_latency"].append(0.0)
+        transcription = "ERROR"
+        language = "ERROR"
+        language_pred = 0.0
 
     end_time = time.time()
-    latency_data["total_latency"].append(end_time - start_time)
+    total_latency = end_time - start_time
+    latency_data["total_latency"].append(total_latency)
 
-    # Если поток превысил нужную длину, сбрасываем его и сохраняем транскрипцию в историю
+    # Выравниваем длину всех списков в latency_data, дополняя недостающие элементы нулями
+    max_len = max(len(lst) for lst in latency_data.values())
+    for key in latency_data:
+        while len(latency_data[key]) < max_len:
+            latency_data[key].append(0.0)
+
+    # Если длина потока превышает max_length, сохраняем транскрипцию и оставляем перекрытие для следующей части
     if len(stream) > sampling_rate * max_length:
-        stream = None
         transcription_history.append(current_transcription)
+        # Вычисляем количество семплов, соответствующих длительности перекрытия
+        overlap_samples = int(overlap_duration * sampling_rate)
+        stream = stream[-overlap_samples:]
         current_transcription = ""
 
-    # Формируем отображаемый текст (сырой)
+    # Формируем отображаемый текст: текущая транскрипция + история (с обратным порядком)
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
-    # Применяем размер шрифта
     transcription_html = apply_text_size(display_text, font_size)
 
-    # Подсчитываем и подготавливаем статистику задержек
+    # Подготавливаем таблицу статистики задержек (переводим секунды в миллисекунды)
     info_df = pd.DataFrame(latency_data)
-    info_df = info_df.apply(lambda x: x * 1000)  # из секунд в миллисекунды
+    info_df = info_df.apply(lambda x: x * 1000)
     info_df = info_df.describe().loc[["min", "max", "mean"]]
     info_df = info_df.round(2)
     info_df = info_df.astype(str) + " ms"
@@ -303,6 +322,7 @@ def dummy_function(
         transcription_history,
         language_and_pred_text
     )
+
 
 
 # -----------------------------------------------------------------------------
@@ -328,12 +348,12 @@ with gr.Blocks(
         gr.Markdown("## Живая транскрипция")
         with gr.Accordion(label="Как использовать", open=False):
             gr.Markdown("""
-**1.** Нажмите **Start** и разрешите доступ к микрофону.\n
-**2.** Выберите язык (или оставьте Auto detect).\n
-**3.** При необходимости настройте максимальную длину аудио.\n
-**4.** Нажмите **Stop**, чтобы остановить запись.\n
-**5.** Чтобы очистить данные и начать заново, нажмите **Reset**.\n
-**6.** Для перевода полученного текста используйте блок ниже.
+    **1.** Нажмите **Start** и разрешите доступ к микрофону.
+    **2.** Выберите язык (или оставьте Auto detect).
+    **3.** Настройте максимальную длину аудио и длительность перекрытия между чанками.
+    **4.** Нажмите **Stop**, чтобы остановить запись.
+    **5.** Чтобы очистить данные и начать заново, нажмите **Reset**.
+    **6.** Для перевода полученного текста используйте блок ниже.
             """)
 
         with gr.Row():
@@ -358,6 +378,13 @@ with gr.Blocks(
                 maximum=30,
                 step=1,
                 label="Макс. длина аудио (сек)"
+            )
+            overlap_slider = gr.Slider(
+                value=1.0,
+                minimum=0.0,
+                maximum=5.0,
+                step=0.1,
+                label="Перекрытие чанков (сек)"
             )
             reset_button = gr.Button("Reset")
 
@@ -470,23 +497,24 @@ with gr.Blocks(
     mic_audio_input.stream(
         fn=dummy_function,
         inputs=[
-            stream_state,            # текущее состояние потока
-            mic_audio_input,         # входные данные (аудио)
-            max_length_input,        # максимальная длина аудио
-            latency_data_state,      # статистика задержек
+            stream_state,              # Текущее состояние аудиопотока
+            mic_audio_input,           # Входные аудио-данные
+            max_length_input,          # Максимальная длина аудио (сек)
+            overlap_slider,            # Длительность перекрытия между чанками (сек)
+            latency_data_state,        # Статистика задержек
             current_transcription_state,
             transcription_history_state,
             language_code_input,
-            font_size_dropdown       # размер шрифта
+            font_size_dropdown         # Размер шрифта
         ],
         outputs=[
-            stream_state,                   # обновлённый аудиопоток
-            transcription_html,             # HTML с транскрипцией
-            info_table_output,              # статистика задержек
-            latency_data_state,             # обновлённый словарь задержек
-            current_transcription_state,    # текущая транскрипция (буфер)
-            transcription_history_state,    # история транскрипций
-            transcription_language_prod_output  # язык
+            stream_state,                      # Обновлённый аудиопоток
+            transcription_html,                # HTML с транскрипцией
+            info_table_output,                 # Статистика задержек
+            latency_data_state,                # Обновлённый словарь задержек
+            current_transcription_state,       # Текущий буфер транскрипции
+            transcription_history_state,       # История транскрипций
+            transcription_language_prod_output  # Информация о языке
         ],
         show_progress="hidden"
     )
