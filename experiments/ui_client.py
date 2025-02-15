@@ -133,6 +133,7 @@ label {
 
 
 with gr.Blocks(css=custom_css, theme=gr.themes.Default(spacing_size=gr.themes.sizes.spacing_sm, radius_size=gr.themes.sizes.radius_none)) as demo:
+    
     gr.Markdown("# Live Transcription PoC\n\n")
 
     # Stores the audio data that we'll process
@@ -212,7 +213,7 @@ etc...
     transcription_language_prod_output = gr.Text(lines=1,
                                                  show_label=False,
                                                  interactive=False)
-    transcription_display = gr.Textbox(lines=10,
+    transcription_display = gr.Textbox(lines=5,
                                        show_label=False,
                                        interactive=False,
                                        show_copy_button=True)
@@ -233,6 +234,18 @@ etc...
             # Display area for the loaded audio file
             loaded_audio_display = gr.Audio(label="Loaded Audio File", interactive=False)
 
+    audio_file_input = gr.File(visible=False)
+
+    def load_audio_file(file):
+        predefined_file_path = "Запись (27).m4a"
+    
+        # Ensure the file exists
+        if not os.path.exists(predefined_file_path):
+            return None  # Handle missing file gracefully
+        return predefined_file_path
+    
+    load_audio_button.click(load_audio_file, inputs=[audio_file_input], outputs=[loaded_audio_display])    
+    
     # In gradio the default samplign rate is 48000 (https://github.com/gradio-app/gradio/issues/6526)
     # and the chunks size varies between 24000 and 48000 - so between 0.5sec and 1 sec
     mic_audio_input.stream(dummy_function, [
