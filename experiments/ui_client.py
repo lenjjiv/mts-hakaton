@@ -122,13 +122,18 @@ def dummy_function(stream, new_chunk, max_length, latency_data,
 custom_css = """
 .transcription_display_container {max-height: 500px; overflow-y: scroll}
 footer {visibility: hidden}
+label {
+    font-size: 18px;       /* Larger font size */
+    font-weight: bold;     /* Optional: Make labels bold */
+    color: #333;           /* Optional: Adjust text color */
+    margin-bottom: 8px;    /* Optional: Add spacing below labels */
+}
 """
 
-with gr.Blocks(css=custom_css, theme=gr.themes.Soft()) as demo:
+
+
+with gr.Blocks(css=custom_css, theme=gr.themes.Default(spacing_size=gr.themes.sizes.spacing_sm, radius_size=gr.themes.sizes.radius_none)) as demo:
     gr.Markdown("# Live Transcription PoC\n\n")
-    nb_visitors_output = gr.Text(f"Page visits: {-1}",
-                                 interactive=False,
-                                 show_label=False)
 
     # Stores the audio data that we'll process
     stream_state = gr.State(None)
@@ -212,13 +217,21 @@ etc...
                                        interactive=False,
                                        show_copy_button=True)
 
-    gr.Markdown(
-        "------\n\n## Statistics\n\nThese are just rough estimates, as the latency can vary a lot based on where are the servers located, resampling is required, etc."
-    )
+    
 
-    # information_table_outout = gr.Markdown("(Info about latency will be shown here)")
-    information_table_outout = gr.DataFrame(interactive=False,
-                                            show_label=False)
+    with gr.Column():
+        gr.Markdown("## Load and Display Audio File")
+
+        # Button to load an audio file
+        load_audio_button = gr.Button("Load Audio File", elem_id="full-width-button")
+        with gr.Row():
+            gr.Textbox(lines=1,
+                                       label='Text',
+                                       interactive=False,
+                                       show_copy_button=True)
+            
+            # Display area for the loaded audio file
+            loaded_audio_display = gr.Audio(label="Loaded Audio File", interactive=False)
 
     # In gradio the default samplign rate is 48000 (https://github.com/gradio-app/gradio/issues/6526)
     # and the chunks size varies between 24000 and 48000 - so between 0.5sec and 1 sec
@@ -227,61 +240,59 @@ etc...
         current_transcription_state, transcription_history_state,
         language_code_input
     ], [
-        stream_state, transcription_display, information_table_outout,
+        stream_state, transcription_display,
         latency_data_state, current_transcription_state,
         transcription_history_state, transcription_language_prod_output
     ],
                            show_progress="hidden")
 
-    def _reset_button_click(stream_state, transcription_display,
-                            information_table_outout, latency_data_state,
+    def _reset_button_click(stream_state, transcription_display, latency_data_state,
                             transcription_history_state,
                             current_transcription_state):
         stream_state = None
         transcription_display = ""
-        information_table_outout = None
         latency_data_state = None
         transcription_history_state = []
         current_transcription_state = ""
 
-        return stream_state, transcription_display, information_table_outout, latency_data_state, transcription_history_state, current_transcription_state, ""
+        return stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state, ""
 
     reset_button.click(_reset_button_click, [
-        stream_state, transcription_display, information_table_outout,
+        stream_state, transcription_display,
         latency_data_state, transcription_history_state,
         current_transcription_state
     ], [
-        stream_state, transcription_display, information_table_outout,
+        stream_state, transcription_display,
         latency_data_state, transcription_history_state,
         current_transcription_state, transcription_language_prod_output
     ])
 
-    def _on_load(request: gr.Request):
-        params = request.query_params
-        user_ip = request.client.host
+        # def _on_load(request: gr.Request):
+        #     params = request.query_params
+        #     user_ip = request.client.host
 
-        try:
-            with open("visits.csv", "r") as f:
-                last_line = f.readlines()[-1]
-                last_number = int(last_line.split(",")[0])
-        except Exception as e:
-            print("[*] Error with reading the file", e)
-            last_number = 0
+        #     try:
+        #         with open("visits.csv", "r") as f:
+        #             last_line = f.readlines()[-1]
+        #             last_number = int(last_line.split(",")[0])
+        #     except Exception as e:
+        #         print("[*] Error with reading the file", e)
+        #         last_number = 0
 
-        with open("visits.csv", "a") as f:
-            f.write(
-                f"{last_number + 1},{datetime.datetime.now()},{user_ip},visited\n"
-            )
+        #     with open("visits.csv", "a") as f:
+        #         f.write(
+        #             f"{last_number + 1},{datetime.datetime.now()},{user_ip},visited\n"
+        #         )
 
-        # Get the unique visitors count
-        unique_visitors = 0
-        with open("visits.csv", "r") as f:
-            nb_unique_visitors = len(
-                set([line.split(",")[2] for line in f.readlines()]))
+        #     # Get the unique visitors count
+        #     unique_visitors = 0
+        #     with open("visits.csv", "r") as f:
+        #         nb_unique_visitors = len(
+        #             set([line.split(",")[2] for line in f.readlines()]))
 
-        return f"Page visits: {last_number + 1} / Unique visitors: {nb_unique_visitors}"
+        #     return f"Page visits: {last_number + 1} / Unique visitors: {nb_unique_visitors}"
 
-    demo.load(_on_load, [], [nb_visitors_output])
+        # demo.load(_on_load, [], [nb_visitors_output])
 
 SSL_CERT_PATH: Optional[str] = os.environ.get("SSL_CERT_PATH", None)
 SSL_KEY_PATH: Optional[str] = os.environ.get("SSL_KEY_PATH", None)
