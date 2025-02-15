@@ -2,7 +2,7 @@
 Репозиторий для кода хакатона МТС
 ---
 
-- [Сайт с заданиями]()
+- [Сайт с заданиями](https://truetecharena.ru/contests/system-hack-nn#/tasks/39/136)
 - [Базовый репозиторий, с которого взят фронт](https://github.com/gaborvecsei/whisper-live-transcription)
 - [Coqui TTS примеры (Google Colab)](https://colab.research.google.com/github/snakers4/silero-models/blob/master/examples_tts.ipynb#scrollTo=stupid-naples)
 
