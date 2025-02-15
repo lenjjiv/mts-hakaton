@@ -14,6 +14,24 @@ LENGHT_IN_SEC: int = 6  # We'll process this amount of audio data together maxim
 
 TRANSCRIPTION_API_ENDPOINT = "http://localhost:8000/predict"
 
+def tts_from_server(text: str, save_path: str):
+            url = "http://176.114.66.227:8000/stream-audio"
+            data = {"text": text}
+
+            try:
+                response = requests.post(url, json=data, stream=True)
+                response.raise_for_status()
+
+                with open(save_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                print(f"Аудио файл успешно сохранен в {save_path}")
+
+            except requests.exceptions.RequestException as e:
+                print(f"Ошибка при получении аудио: {e}")
+
 
 def send_audio_to_server(audio_data: np.ndarray,
                          language_code: str = "") -> Tuple[str, str, float]:
@@ -221,31 +239,35 @@ etc...
     
 
     with gr.Column():
-        gr.Markdown("## Load and Display Audio File")
+        gr.Markdown("## Text to speech")
 
         # Button to load an audio file
-        load_audio_button = gr.Button("Load Audio File", elem_id="full-width-button")
+        load_audio_button = gr.Button("Convert text to speech", elem_id="full-width-button")
         with gr.Row():
-            gr.Textbox(lines=1,
-                                       label='Text',
-                                       interactive=False,
-                                       show_copy_button=True)
+            tts_text_box = gr.Textbox(lines=1,
+                        label='Text',
+                        interactive=True,
+                        show_copy_button=True)
             
             # Display area for the loaded audio file
-            loaded_audio_display = gr.Audio(label="Loaded Audio File", interactive=False)
+            loaded_audio_display = gr.Audio(label="Audio file", interactive=False)
 
-    audio_file_input = gr.File(visible=False)
+    audio_file_input = gr.File(visible=False) 
 
-    def load_audio_file(file):
-        predefined_file_path = "Запись (27).m4a"
+    def text_to_speech(text, language='english', **kwargs):
+        """
+        Sends text from text box to tts server via http
+        Saves audio file to tmp
+        Uploads file to gr.Audio
+        """
+
+        save_path = "tmp/downloaded_audio.mp3"
+        tts_from_server(text, save_path)
+        return save_path
     
-        # Ensure the file exists
-        if not os.path.exists(predefined_file_path):
-            return None  # Handle missing file gracefully
-        return predefined_file_path
-    
-    load_audio_button.click(load_audio_file, inputs=[audio_file_input], outputs=[loaded_audio_display])    
-    
+    load_audio_button.click(text_to_speech, inputs=[tts_text_box], outputs=[loaded_audio_display])
+
+
     # In gradio the default samplign rate is 48000 (https://github.com/gradio-app/gradio/issues/6526)
     # and the chunks size varies between 24000 and 48000 - so between 0.5sec and 1 sec
     mic_audio_input.stream(dummy_function, [
