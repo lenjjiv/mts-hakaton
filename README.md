@@ -2,9 +2,14 @@
 Репозиторий для кода хакатона МТС
 ---
 
-- [Сайт с заданиями]()
-
-- [Coqui TTS примеры (Google Colab)](https://colab.research.google.com/github/snakers4/silero-models/blob/master/examples_tts.ipynb#scrollTo=stupid-naples)
+- Код для запуска сервера
+```bash
+uvicorn server_whisper:app --host 0.0.0.0 --port 8001 --reload
+```
+- Код для запуска фронтенда
+```bash
+python3 './experiments/ui_client.py'
+```
 
 ---
 
