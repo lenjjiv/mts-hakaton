@@ -9,9 +9,10 @@ import numpy as np
 import pandas as pd
 import requests
 
-STEPS_IN_SEC: int = 1  # How frequently we should run the transcription
-LENGHT_IN_SEC: int = 6  # We'll process this amount of audio data together maximum
+STEPS_IN_SEC: int = 1  # Частота отправки аудио (в секундах)
+LENGHT_IN_SEC: int = 6  # Максимальная длина аудиофрагмента для обработки
 
+# ВНИМАНИЕ: Замените URL на корректный адрес работающего сервера транскрипции!
 TRANSCRIPTION_API_ENDPOINT = "http://localhost:8000/predict"
 
 
@@ -19,21 +20,42 @@ def send_audio_to_server(
         audio_data: np.ndarray,
         language_code: str = ""
     ) -> Tuple[str, str, float]:
-    # This is how the server expects the data
+    """
+    Отправляет аудиоданные на сервер транскрипции и возвращает результаты.
+
+    Аргументы:
+        audio_data (np.ndarray): Массив аудиоданных (будет приведён к типу int16 и отправлен как байты).
+        language_code (str): Код языка для транскрипции (по умолчанию пустая строка, что означает автоопределение).
+
+    Возвращает:
+        tuple: Кортеж из трех значений:
+            - prediction (str): Полученная транскрипция или "ERROR" в случае ошибки.
+            - language (str): Определённый язык или "ERROR" в случае ошибки.
+            - language_probability (float): Вероятность определения языка или 0.0 в случае ошибки.
+    """
     audio_data_bytes = audio_data.astype(np.int16).tobytes()
+    try:
+        response = requests.post(
+            TRANSCRIPTION_API_ENDPOINT,
+            data=audio_data_bytes,
+            params={"language_code": language_code},
+            headers={
+                "accept": "application/json",
+                "Content-Type": "application/octet-stream"
+            },
+            timeout=10  # Добавлен таймаут на случай зависания запроса
+        )
+        response.raise_for_status()  # Генерирует исключение для кода ответа отличного от 200
+        result = response.json()
+    except Exception as e:
+        print(f"[*] Ошибка при отправке аудио на сервер транскрипции: {e}")
+        return "ERROR", "ERROR", 0.0
 
-    response = requests.post(
-        TRANSCRIPTION_API_ENDPOINT,
-        data=audio_data_bytes,
-        params={"language_code": language_code},
-        headers={
-            "accept": "application/json",
-            "Content-Type": "application/octet-stream"
-    })
-
-    result = response.json()
-    return result["prediction"], result["language"], result[
-        "language_probability"]
+    return (
+        result.get("prediction", "ERROR"),
+        result.get("language", "ERROR"),
+        result.get("language_probability", 0.0)
+    )
 
 
 def process_audio_chunk(
@@ -46,20 +68,20 @@ def process_audio_chunk(
     language_code
 ):
     """
-    Обрабатывает новый фрагмент аудио, выполняет ресэмплинг и отправляет аудиоданные на сервер транскрипции.
-    
+    Обрабатывает новый аудиофрагмент: выполняет ресэмплинг, отправляет данные на сервер транскрипции,
+    обновляет историю транскрипций и собирает статистику задержек.
+
     Аргументы:
         stream (np.ndarray или None): Накопленный аудиопоток.
-        new_chunk (tuple): Кортеж (sampling_rate, y), где y – массив аудио данных.
-        max_length (int): Максимальная длина аудио (в секундах) для обработки за один раз.
-        latency_data (dict): Словарь с данными о задержках, содержащий списки для 'total_resampling_latency',
-                             'total_transcription_latency' и 'total_latency'.
+        new_chunk (tuple): (sampling_rate, y) – данные нового аудиофрагмента.
+        max_length (int): Максимальная длина аудио для обработки.
+        latency_data (dict): Словарь для накопления данных задержек.
         current_transcription (str): Текущая транскрипция.
         transcription_history (list): История предыдущих транскрипций.
-        language_code (str или list): Код языка (либо список, либо строка).
-    
+        language_code (str или list): Код языка (или список с кодами).
+
     Возвращает:
-        tuple: Обновлённый кортеж состояний:
+        tuple: Обновлённые состояния:
             - stream: обновлённый аудиопоток.
             - display_text: текст для отображения транскрипции.
             - info_df: DataFrame с данными о задержках.
@@ -108,7 +130,6 @@ def process_audio_chunk(
         stream_resampled = librosa.resample(stream, orig_sr=sampling_rate, target_sr=16000)
     except Exception as e:
         print("[*] Ошибка при ресэмплинге:", e)
-        # Если ошибка – используем исходный аудиопоток в качестве запасного варианта
         stream_resampled = stream
         resample_latency = 0.0
     else:
@@ -119,13 +140,11 @@ def process_audio_chunk(
     # --- ТРАНСКРИПЦИЯ ---
     transcription_start = time.time()
     try:
-        # Если language_code передан в виде списка, берём первый элемент
         if isinstance(language_code, list):
             language_code = language_code[0] if language_code else ""
         transcription, language, language_pred = send_audio_to_server(
             stream_resampled, str(language_code)
         )
-        # Убираем не вербальные обозначения (текст в скобках или квадратных скобках)
         transcription = re.sub(r"\[.*?\]", "", transcription)
         transcription = re.sub(r"\(.*?\)", "", transcription)
         current_transcription = transcription
@@ -142,7 +161,6 @@ def process_audio_chunk(
     total_latency = time.time() - start_time
     latency_data["total_latency"].append(total_latency)
 
-    # Если длина аудиопотока превышает максимально допустимую – сбрасываем поток
     if len(stream) > sampling_rate * max_length:
         stream = None
         transcription_history.append(current_transcription)
@@ -150,7 +168,6 @@ def process_audio_chunk(
 
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
 
-    # Формирование таблицы задержек
     info_df = pd.DataFrame(latency_data)
     info_df = info_df.apply(lambda x: x * 1000)
     info_df = info_df.describe().loc[["min", "max", "mean"]]
@@ -171,7 +188,6 @@ def process_audio_chunk(
         transcription_history,
         language_and_pred_text
     )
-
 
 
 custom_css = """

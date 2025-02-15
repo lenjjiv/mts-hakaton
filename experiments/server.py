@@ -1,7 +1,10 @@
 import asyncio
 from typing import Tuple
-
 import numpy as np
+
+import torch
+torch.backends.cudnn.enabled = False
+
 import uvicorn
 from fastapi import Depends, FastAPI, Request
 from faster_whisper import WhisperModel
@@ -9,168 +12,148 @@ from faster_whisper import WhisperModel
 app = FastAPI()
 
 MODEL_TYPE = "large-v2"
-RUN_TYPE = "gpu"  # "cpu" or "gpu"
-
-# For CPU usage (https://github.com/SYSTRAN/faster-whisper/issues/100#issuecomment-1492141352)
-NUM_WORKERS = 10
-CPU_THREADS = 4
-
-# For GPU usage
+RUN_TYPE = "gpu"
 GPU_DEVICE_INDICES = [0]
-
-VAD_FILTER = True
+VAD_FILTER = False
 
 def create_whisper_model() -> WhisperModel:
+    """
+    Создает и инициализирует модель Whisper.
+    
+    Returns:
+        WhisperModel: Инициализированная модель для транскрипции
+    
+    Raises:
+        ValueError: Если указан неверный тип запуска (не cpu/gpu)
+    """
     if RUN_TYPE.lower() == "gpu":
-        whisper = WhisperModel(
-            MODEL_TYPE,
-            device="cuda",
-            compute_type="float16",
-            device_index=GPU_DEVICE_INDICES,
-            download_root="./models"
-        )
-
-    elif RUN_TYPE.lower() == "cpu":
-        whisper = WhisperModel(MODEL_TYPE,
-            device="cpu",
-            compute_type="int8",
-            num_workers=NUM_WORKERS,
-            cpu_threads=CPU_THREADS,
-            download_root="./models"
-        )
+        # Для GPU важно явно указать compute_type и убедиться, что CUDA доступна
+        try:
+            whisper = WhisperModel(
+                MODEL_TYPE,
+                device="cuda",
+                compute_type="float16",
+                device_index=GPU_DEVICE_INDICES,
+                download_root="./models",
+                local_files_only=False  # Предотвращает попытки загрузки во время инференса
+            )
+        except Exception as e:
+            print(f"Ошибка инициализации GPU модели: {e}")
+            raise
     else:
-        raise ValueError(f"Invalid model type: {RUN_TYPE}")
-
-    print("Loaded model")
+        raise ValueError(f"Неподдерживаемый тип запуска: {RUN_TYPE}")
 
     return whisper
 
+# Инициализация модели при старте приложения
+try:
+    model = create_whisper_model()
+    print("Модель успешно загружена")
+except Exception as e:
+    print(f"Ошибка при загрузке модели: {e}")
+    raise
 
-model = create_whisper_model()
-print("Loaded model")
+async def parse_body(request: Request) -> bytes:
+    """
+    Асинхронно читает и возвращает тело запроса.
+    
+    Args:
+        request (Request): Объект запроса FastAPI
+    
+    Returns:
+        bytes: Тело запроса в виде байтов
+    """
+    try:
+        data: bytes = await request.body()
+        return data
+    except Exception as e:
+        print(f"Ошибка при чтении тела запроса: {e}")
+        raise
 
-
-async def parse_body(request: Request):
-    data: bytes = await request.body()
-    return data
-
-
-def transcribe_audio(
+async def transcribe_audio(
     model: WhisperModel,
     audio_data_array: np.ndarray,
     language_code: str = ""
 ) -> Tuple[str, str, float]:
     """
-    Выполняет синхронную транскрипцию аудиоданных с помощью модели Whisper.
+    Асинхронно выполняет транскрипцию аудио данных.
     
-    Аргументы:
-        model (WhisperModel): Экземпляр модели Whisper.
-        audio_data_array (np.ndarray): Аудиоданные в виде массива numpy.float32.
-        language_code (str): Код языка (если пустой, автоопределение).
-
-    Возвращает:
-        tuple: Кортеж, содержащий транскрипцию, определённый язык и вероятность определения языка.
-        
-    Исключения:
-        RuntimeError: Если возникла ошибка при работе с GPU
-        ValueError: Если входные данные некорректны
+    Args:
+        model (WhisperModel): Модель Whisper
+        audio_data_array (np.ndarray): Аудио данные
+        language_code (str, optional): Код языка. По умолчанию ""
+    
+    Returns:
+        Tuple[str, str, float]: Кортеж (транскрипция, язык, вероятность определения языка)
     """
     try:
-        language_code = language_code.lower().strip()
-        
-        # Проверка валидности входных данных
-        if len(audio_data_array) == 0:
-            raise ValueError("Пустой массив аудиоданных")
-            
-        # Проверка на NaN и бесконечности
-        if np.isnan(audio_data_array).any() or np.isinf(audio_data_array).any():
-            raise ValueError("Некорректные значения в аудиоданных")
-
-        segments, info = model.transcribe(
-            audio_data_array,
-            language=language_code if language_code != "" else None,
-            beam_size=5,
-            vad_filter=VAD_FILTER,
-            vad_parameters=dict(min_silence_duration_ms=500)
+        # Запускаем тяжелую операцию транскрипции в отдельном потоке
+        segments, info = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: model.transcribe(
+                audio_data_array,
+                language=language_code if language_code != "" else None,
+                beam_size=5,
+                vad_filter=VAD_FILTER,
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
         )
         
-        # Проверка результатов
-        if not hasattr(info, 'language') or not hasattr(info, 'language_probability'):
-            raise RuntimeError("Некорректный результат от модели")
-            
-        segments = [s.text for s in segments]
-        transcription = " ".join(segments).strip()
-        
+        segments_text = [s.text for s in segments]
+        transcription = " ".join(segments_text).strip()
         return transcription, info.language, info.language_probability
-        
+    
     except Exception as e:
-        print(f"[*] Ошибка в transcribe_audio: {str(e)}")
-        # Возвращаем безопасные значения по умолчанию
-        return "", "unknown", 0.0
-
+        print(f"Ошибка при транскрипции: {e}")
+        return "Error during transcription", "unknown", 0.0
 
 @app.post("/predict")
 async def predict(
-        audio_data: bytes = Depends(parse_body), 
-        language_code: str = ""
-    ) -> dict:
+    audio_data: bytes = Depends(parse_body), 
+    language_code: str = ""
+):
     """
-    Асинхронный обработчик POST-запросов для транскрипции аудио.
+    Эндпоинт для получения транскрипции аудио.
     
-    Аргументы:
-        audio_data (bytes): Аудиоданные в бинарном формате
-        language_code (str): Код языка для транскрипции
-        
-    Возвращает:
-        dict: Словарь с результатами транскрипции:
-            - prediction: текст транскрипции
-            - language: определённый язык
-            - language_probability: вероятность определения языка
+    Args:
+        audio_data (bytes): Аудио данные в формате bytes
+        language_code (str, optional): Код языка. По умолчанию ""
+    
+    Returns:
+        dict: Результат транскрипции с полями prediction, language и language_probability
     """
     try:
-        # Проверка входных данных
-        if not audio_data:
-            raise ValueError("Пустые аудиоданные")
-            
-        # Конвертация аудио в numpy массив с проверкой
-        audio_data_array = np.frombuffer(audio_data, np.int16)
-        if len(audio_data_array) == 0:
-            raise ValueError("Ошибка при конвертации аудиоданных")
-            
-        # Нормализация данных
-        audio_data_array = audio_data_array.astype(np.float32) / 255.0
-
-        # Запуск транскрипции в отдельном потоке
-        try:
-            result = await asyncio.get_running_loop().run_in_executor(
-                None, 
-                transcribe_audio, 
-                model, 
-                audio_data_array,
-                language_code
-            )
-        except Exception as e:
-            print(f"[*] Ошибка при выполнении транскрипции: {str(e)}")
-            result = ("", "error", 0.0)
-
-        # Формирование ответа с проверкой
-        response = {
-            "prediction": result[0] if result[0] else "",
-            "language": result[1] if result[1] else "unknown",
-            "language_probability": float(result[2]) if result[2] is not None else 0.0
-        }
+        # Конвертируем байты в numpy массив
+        audio_data_array = np.frombuffer(audio_data, np.int16).astype(np.float32) / 255.0
         
-        return response
-
-    except Exception as e:
-        print(f"[*] Общая ошибка в predict: {str(e)}")
-        # Возвращаем безопасный ответ в случае ошибки
+        # Выполняем транскрипцию
+        transcription, language, probability = await transcribe_audio(
+            model, 
+            audio_data_array,
+            language_code
+        )
+        
         return {
-            "prediction": "",
-            "language": "error",
+            "prediction": transcription,
+            "language": language,
+            "language_probability": probability
+        }
+    
+    except Exception as e:
+        print(f"Ошибка в эндпоинте predict: {e}")
+        return {
+            "prediction": "Error processing request",
+            "language": "unknown",
             "language_probability": 0.0
         }
 
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Запускаем с правильными настройками для FastAPI
+    uvicorn.run(
+        "server:app",  # Важно указать путь к приложению в формате "файл:app"
+        host="0.0.0.0",
+        port=8000,
+        workers=1,  # Для GPU лучше использовать один воркер
+        loop="asyncio",
+        reload=True  # Отключаем автоперезагрузку для продакшена
+    )
