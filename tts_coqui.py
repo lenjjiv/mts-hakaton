@@ -3,9 +3,16 @@ from pathlib import Path
 import torch
 import logging
 
+logging.basicConfig(
+    level=logging.INFO,  # Установим уровень логирования
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler()  # Вывод в консоль
+    ]
+)
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.info("Вызван tts_coqui.py")
 
 # Функция для синтеза речи
 def text_to_speech_coqui(text, model, file_to_save="output.wav", speed=1.0):
@@ -29,13 +36,13 @@ def text_to_speech_coqui(text, model, file_to_save="output.wav", speed=1.0):
             speed=speed
         )
 
-        logging.info(f"TTS сохранён в {file_to_save}")
-
+        logger.info(f"TTS сохранён в {file_to_save}")
+        
     except Exception as e:
-        logging.error(f"Ошибка во время генерации TTS: {e}")
+        logger.error(f"Ошибка во время генерации TTS: {e}")
 
 
-if __name__ == "main":
+if __name__ == "__main__":
 
     model_name = "tts_models/en/ljspeech/vits"
     device = "cuda"
@@ -52,4 +59,5 @@ if __name__ == "main":
     file_to_save = "output_1.mp3"
 
     # Вызов функции синтеза речи
+    logger.info("Начало Text-2-Speech")
     text_to_speech_coqui(text, model, file_to_save=file_to_save)
