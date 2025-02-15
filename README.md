@@ -2,14 +2,16 @@
 Репозиторий для кода хакатона МТС
 ---
 
-- Код для запуска сервера
+1.  Код для запуска сервера
 ```bash
-uvicorn server_whisper:app --host 0.0.0.0 --port 8001 --reload
+uvicorn server_whisper:app --host 0.0.0.0 --port 8000 --reload
 ```
-- Код для запуска фронтенда
+2. Код для запуска фронтенда
 ```bash
 python3 './experiments/ui_client.py'
 ```
+3. Далее выдаётся временная ссылка gradio (72 hours).
+4. Заходим по ней и тестируем функционал.
 
 ---
 

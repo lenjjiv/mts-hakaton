@@ -43,7 +43,7 @@ def send_audio_to_server(
                 "accept": "application/json",
                 "Content-Type": "application/octet-stream"
             },
-            timeout=10  # Добавлен таймаут на случай зависания запроса
+            timeout=20
         )
         response.raise_for_status()  # Генерирует исключение для кода ответа отличного от 200
         result = response.json()
@@ -258,7 +258,8 @@ etc...
         with gr.Row():
             mic_audio_input = gr.Audio(sources=["microphone"], streaming=True)
             reset_button = gr.Button("Reset")
-            max_length_input = gr.Slider(value=10,
+            max_length_input = gr.Slider(
+                value=10,
                                          minimum=2,
                                          maximum=30,
                                          step=1,
@@ -277,13 +278,17 @@ etc...
     gr.Markdown(
         "-------\n\n## Transcription\n\n(audio is sent to the server each second)\n\n"
     )
-    transcription_language_prod_output = gr.Text(lines=1,
-                                                 show_label=False,
-                                                 interactive=False)
-    transcription_display = gr.Textbox(lines=10,
-                                       show_label=False,
-                                       interactive=False,
-                                       show_copy_button=True)
+    transcription_language_prod_output = gr.Text(
+        lines=1,
+        show_label=False,
+        interactive=False
+    )
+    transcription_display = gr.Textbox(
+        lines=10,
+        show_label=False,
+        interactive=False,
+        show_copy_button=True
+    )
 
     gr.Markdown(
         "------\n\n## Statistics\n\nThese are just rough estimates, as the latency can vary a lot based on where are the servers located, resampling is required, etc."
