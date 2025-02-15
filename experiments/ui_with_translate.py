@@ -107,7 +107,7 @@ def send_audio_to_server(audio_data: np.ndarray, language_code: str = "") -> Tup
     return result["prediction"], result["language"], result["language_probability"]
 
 
-def dummy_function(stream, new_chunk, max_length, latency_data, current_transcription, transcription_history, language_code):
+def dummy_function(stream, new_chunk, max_length, latency_data, current_transcription, transcription_history, language_code, source_lang):
     """
     Обрабатывает поток аудио данных, выполняет транскрипцию и обновляет историю транскрипций.
 
@@ -148,7 +148,10 @@ def dummy_function(stream, new_chunk, max_length, latency_data, current_transcri
         current_transcription = ""
 
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
-    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)", f"{language_pred * 100:.2f}%"
+
+    new_source_lang = language if not source_lang else source_lang
+
+    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)", new_source_lang
 
 
 def _reset_button_click(stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state):
@@ -157,7 +160,7 @@ def _reset_button_click(stream_state, transcription_display, latency_data_state,
 
     :return: Начальные значения состояний.
     """
-    return None, "", None, [], "", "", ""
+    return None, "", None, [], "", "", "en"
 
 
 # Создание интерфейса Gradio с двумя основными блоками: транскрипция (и TTS) слева и перевод справа
@@ -243,7 +246,7 @@ with gr.Blocks() as demo:
     mic_audio_input.stream(
         dummy_function,
         inputs=[stream_state, mic_audio_input, max_length_input, latency_data_state,
-                current_transcription_state, transcription_history_state, language_code_input],
+                current_transcription_state, transcription_history_state, language_code_input, source_lang],
         outputs=[stream_state, transcription_display, latency_data_state, current_transcription_state,
                  transcription_history_state, transcription_language_prod_output, source_lang],
         show_progress="hidden"
