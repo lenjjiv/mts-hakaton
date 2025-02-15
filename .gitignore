@@ -138,6 +138,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+tmp/
+*generated_audio*
 
 # Spyder project settings
 .spyderproject
