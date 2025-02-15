@@ -14,9 +14,10 @@ LENGHT_IN_SEC: int = 6  # We'll process this amount of audio data together maxim
 
 TRANSCRIPTION_API_ENDPOINT = "http://localhost:8000/predict"
 
-def tts_from_server(text: str, save_path: str):
+def tts_from_server(text: str, lang: str, save_path: str):
+            """Отправляет текст на сервер и сохраняет аудиофайл."""
             url = "http://176.114.66.227:8000/stream-audio"
-            data = {"text": text}
+            data = {"text": text, "lang": lang}
 
             try:
                 response = requests.post(url, json=data, stream=True)
@@ -27,11 +28,10 @@ def tts_from_server(text: str, save_path: str):
                         if chunk:
                             f.write(chunk)
 
-                print(f"Аудио файл успешно сохранен в {save_path}")
+                print(f"Аудио файл сохранен в {save_path}")
 
             except requests.exceptions.RequestException as e:
                 print(f"Ошибка при получении аудио: {e}")
-
 
 def send_audio_to_server(audio_data: np.ndarray,
                          language_code: str = "") -> Tuple[str, str, float]:
@@ -244,11 +244,23 @@ etc...
         # Button to load an audio file
         load_audio_button = gr.Button("Convert text to speech", elem_id="full-width-button")
         with gr.Row():
-            tts_text_box = gr.Textbox(lines=1,
-                        label='Text',
-                        interactive=True,
-                        show_copy_button=True)
-            
+            with gr.Column():
+                tts_text_box = gr.Textbox(lines=1,
+                            label='Text',
+                            interactive=True,
+                            show_copy_button=True)
+
+                tts_lanuage_code = gr.Dropdown([("Auto detect", ""),
+                                               ("English", "en"),
+                                               ("Spanish", "es"),
+                                               ("Italian", "it"),
+                                               ("German", "de"),
+                                               ("Hungarian", "hu"),
+                                               ("Russian", "ru")],
+                                              value="",
+                                              label="Language code",
+                                              multiselect=False)
+
             # Display area for the loaded audio file
             loaded_audio_display = gr.Audio(label="Audio file", interactive=False)
 
@@ -262,10 +274,12 @@ etc...
         """
 
         save_path = "tmp/downloaded_audio.mp3"
-        tts_from_server(text, save_path)
+        tts_from_server(text, language, save_path)
         return save_path
     
-    load_audio_button.click(text_to_speech, inputs=[tts_text_box], outputs=[loaded_audio_display])
+    load_audio_button.click(text_to_speech, inputs=[tts_text_box, tts_lanuage_code], outputs=[loaded_audio_display])
+
+    
 
 
     # In gradio the default samplign rate is 48000 (https://github.com/gradio-app/gradio/issues/6526)
