@@ -109,6 +109,7 @@ def text_to_speech(text: str, language: str = "en") -> str:
     Возвращает:
         str: Путь к загруженному аудиофайлу.
     """
+    os.makedirs("tmp", exist_ok=True)
     save_path = "tmp/downloaded_audio.mp3"
     tts_from_server(text, language, save_path)
     return save_path
@@ -475,7 +476,7 @@ with gr.Blocks(
                     # ("Hungarian", "hu"),
                     # ("Auto detect", ""),
                 ],
-                value="",
+                value="ru",
                 label="Язык для TTS",
                 multiselect=False
             )
