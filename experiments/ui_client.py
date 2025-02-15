@@ -249,6 +249,13 @@ etc...
                             label='Text',
                             interactive=True,
                             show_copy_button=True)
+                
+                text_size_dropdown = gr.Dropdown(["8px", "10px", "12px", "14px", "16px", "18px", "20px", "24px", "36px", "48px"],
+                                              value="14px",
+                                              label="Font size",
+                                              multiselect=False)
+                
+                
 
                 tts_lanuage_code = gr.Dropdown([("Auto detect", ""),
                                                ("English", "en"),
@@ -260,11 +267,31 @@ etc...
                                               value="",
                                               label="Language code",
                                               multiselect=False)
+            with gr.Column():
+                gr.Markdown("Output text:")
+                html_text_box = gr.HTML()
 
             # Display area for the loaded audio file
             loaded_audio_display = gr.Audio(label="Audio file", interactive=False)
 
     audio_file_input = gr.File(visible=False) 
+
+    # Function to process the audio data
+    def change_text_size(text, size_change):
+        # Оборачиваем текст в HTML с указанным размером шрифта
+        return f'<span style="font-size: {size_change}">{text}</span>' 
+
+    
+    text_size_dropdown.change(
+        fn=lambda x: x,
+        inputs=[tts_text_box],
+        outputs=[html_text_box]
+    )
+    text_size_dropdown.change(
+        fn=change_text_size,
+        inputs=[tts_text_box, text_size_dropdown],
+        outputs=[html_text_box]
+    )
 
     def text_to_speech(text, language='english', **kwargs):
         """
