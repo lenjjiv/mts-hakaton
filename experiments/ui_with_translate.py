@@ -42,17 +42,6 @@ def translate_text(text, source_lang, target_lang):
         return f"Ошибка {response.status_code}: {response.text}"
 
 
-def translate_interface(text, source_lang, target_lang):
-    """
-    Интерфейс для вызова функции перевода текста.
-
-    :param text: Текст для перевода.
-    :param source_lang: Код исходного языка.
-    :param target_lang: Код целевого языка.
-    :return: Переведённый текст.
-    """
-    return translate_text(text, source_lang, target_lang)
-
 
 def tts_from_server(text: str, lang: str, save_path: str):
     """
@@ -107,7 +96,7 @@ def send_audio_to_server(audio_data: np.ndarray, language_code: str = "") -> Tup
     return result["prediction"], result["language"], result["language_probability"]
 
 
-def dummy_function(stream, new_chunk, max_length, latency_data, current_transcription, transcription_history, language_code, source_lang):
+def dummy_function(stream, new_chunk, max_length, latency_data, current_transcription, transcription_history, language_code, source_lang, target_lang, auto_translate_checked):
     """
     Обрабатывает поток аудио данных, выполняет транскрипцию и обновляет историю транскрипций.
 
@@ -140,6 +129,18 @@ def dummy_function(stream, new_chunk, max_length, latency_data, current_transcri
     except Exception as e:
         print(f"Error: {e}")
 
+    new_source_lang = language if not source_lang else source_lang
+    
+    translation = ""
+    if auto_translate_checked:
+        try:
+            #переводим транскрипцию
+            translation = translate_text(transcription, new_source_lang, target_lang)
+
+        except Exception as e:
+            print(f"Error: {e}")
+
+
     end_time = time.time()
     # Если длина потока превышает максимальную, сбрасываем поток и сохраняем транскрипцию в историю
     if len(stream) > sampling_rate * max_length:
@@ -149,9 +150,8 @@ def dummy_function(stream, new_chunk, max_length, latency_data, current_transcri
 
     display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
 
-    new_source_lang = language if not source_lang else source_lang
 
-    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)", new_source_lang
+    return stream, display_text, latency_data, current_transcription, transcription_history, f"Predicted Language: {language} ({language_pred * 100:.2f}%)", new_source_lang, translation
 
 
 def _reset_button_click(stream_state, transcription_display, latency_data_state, transcription_history_state, current_transcription_state):
@@ -201,7 +201,9 @@ with gr.Blocks() as demo:
             gr.Markdown("## Транскрипция")
             transcription_language_prod_output = gr.Text(lines=1, show_label=False, interactive=False)
             transcription_display = gr.Textbox(lines=5, show_label=False, interactive=False, show_copy_button=True)
-            translate_button = gr.Button("Перевести")
+            with gr.Row():
+                translate_button = gr.Button("Перевести", elem_classes=["button-container"])
+                auto_translate_checkbox = gr.Checkbox(label="Автоматическая транскрипция", value=False, interactive=True, elem_classes=["checkmark"])
 
             
 
@@ -225,7 +227,7 @@ with gr.Blocks() as demo:
 
 
             # Привязка кнопки перевода к функции перевода
-            translate_button.click(translate_interface,
+            translate_button.click(translate_text,
                                    inputs=[transcription_display, source_lang, target_lang],
                                    outputs=output_text)
 
@@ -246,9 +248,9 @@ with gr.Blocks() as demo:
     mic_audio_input.stream(
         dummy_function,
         inputs=[stream_state, mic_audio_input, max_length_input, latency_data_state,
-                current_transcription_state, transcription_history_state, language_code_input, source_lang],
+                current_transcription_state, transcription_history_state, language_code_input, source_lang, target_lang, auto_translate_checkbox],
         outputs=[stream_state, transcription_display, latency_data_state, current_transcription_state,
-                 transcription_history_state, transcription_language_prod_output, source_lang],
+                 transcription_history_state, transcription_language_prod_output, source_lang, output_text],
         show_progress="hidden"
     )
 
