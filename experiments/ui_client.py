@@ -22,22 +22,57 @@ def send_audio_to_server(
     # This is how the server expects the data
     audio_data_bytes = audio_data.astype(np.int16).tobytes()
 
-    response = requests.post(TRANSCRIPTION_API_ENDPOINT,
-                             data=audio_data_bytes,
-                             params={"language_code": language_code},
-                             headers={
-                                 "accept": "application/json",
-                                 "Content-Type": "application/octet-stream"
-                             })
+    response = requests.post(
+        TRANSCRIPTION_API_ENDPOINT,
+        data=audio_data_bytes,
+        params={"language_code": language_code},
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/octet-stream"
+    })
 
     result = response.json()
     return result["prediction"], result["language"], result[
         "language_probability"]
 
 
-def dummy_function(stream, new_chunk, max_length, latency_data,
-                   current_transcription, transcription_history,
-                   language_code):
+def process_audio_chunk(
+    stream,
+    new_chunk,
+    max_length,
+    latency_data,
+    current_transcription,
+    transcription_history,
+    language_code
+):
+    """
+    Обрабатывает новый фрагмент аудио, выполняет ресэмплинг и отправляет аудиоданные на сервер транскрипции.
+    
+    Аргументы:
+        stream (np.ndarray или None): Накопленный аудиопоток.
+        new_chunk (tuple): Кортеж (sampling_rate, y), где y – массив аудио данных.
+        max_length (int): Максимальная длина аудио (в секундах) для обработки за один раз.
+        latency_data (dict): Словарь с данными о задержках, содержащий списки для 'total_resampling_latency',
+                             'total_transcription_latency' и 'total_latency'.
+        current_transcription (str): Текущая транскрипция.
+        transcription_history (list): История предыдущих транскрипций.
+        language_code (str или list): Код языка (либо список, либо строка).
+    
+    Возвращает:
+        tuple: Обновлённый кортеж состояний:
+            - stream: обновлённый аудиопоток.
+            - display_text: текст для отображения транскрипции.
+            - info_df: DataFrame с данными о задержках.
+            - latency_data: обновлённый словарь с данными о задержках.
+            - current_transcription: обновлённая текущая транскрипция.
+            - transcription_history: обновлённая история транскрипций.
+            - language_and_pred_text: строка с информацией о предсказанном языке.
+    """
+    import time
+    import librosa
+    import pandas as pd
+    import re
+
     start_time = time.time()
 
     if latency_data is None:
@@ -48,65 +83,74 @@ def dummy_function(stream, new_chunk, max_length, latency_data,
         }
 
     sampling_rate, y = new_chunk
-    y = y.astype(np.float32)
+    y = y.astype("float32")
 
     if stream is not None:
         stream = np.concatenate([stream, y])
     else:
         stream = y
 
-    # Perform the transcription every second
-    # TODO: can be problematic - as in theory we could get a chunk which is 0.5 sec long - but it's good enough for now
-    # if len(stream) % sampling_rate != 0:
-    #     return stream, transcription_display, information_table_outout, latency_data, current_transcription, transcription_history
+    # Если накоплено менее 1 секунды аудио – пропускаем обработку
+    if len(stream) < sampling_rate:
+        return (
+            stream,
+            current_transcription,
+            None,
+            latency_data,
+            current_transcription,
+            transcription_history,
+            ""
+        )
 
-    transcription = "ERROR"
-    language = "ERROR"
-    language_pred = 0.0
-
+    # --- РЕСЭМПЛИНГ ---
     try:
-        sampling_start_time = time.time()
-        # We need to resample the audio chunk to 16kHz (without this we don't have any output) - gradio cannot handle this
-        # (https://github.com/jonashaag/audio-resampling-in-python)
-        # We need to resample the concatenated stream, because if we resample chunk by chunk, the audio will be distorted
-        stream_resampled = librosa.resample(stream,
-                                            orig_sr=sampling_rate,
-                                            target_sr=16000)
-        sampling_end_time = time.time()
-        latency_data["total_resampling_latency"].append(sampling_end_time -
-                                                        sampling_start_time)
-
-        transcription_start_time = time.time()
-
-        if isinstance(language_code, list):
-            language_code = language_code[0] if len(language_code) > 0 else ""
-
-        transcription, language, language_pred = send_audio_to_server(
-            stream_resampled, str(language_code))
-        current_transcription = f"{transcription}"
-        # remove anything from the text which is between () or [] --> these are non-verbal background noises/music/etc.
-        # transcription = re.sub(r"\[.*\]", "", transcription)
-        # transcription = re.sub(r"\(.*\)", "", transcription)
-        transcription_end_time = time.time()
-        latency_data["total_transcription_latency"].append(
-            transcription_end_time - transcription_start_time)
-
+        resample_start = time.time()
+        stream_resampled = librosa.resample(stream, orig_sr=sampling_rate, target_sr=16000)
     except Exception as e:
-        print("[*] There is an error with the transcription", e)
+        print("[*] Ошибка при ресэмплинге:", e)
+        # Если ошибка – используем исходный аудиопоток в качестве запасного варианта
+        stream_resampled = stream
+        resample_latency = 0.0
+    else:
+        resample_latency = time.time() - resample_start
+    finally:
+        latency_data["total_resampling_latency"].append(resample_latency)
 
-    end_time = time.time()
-    latency_data["total_latency"].append(end_time - start_time)
+    # --- ТРАНСКРИПЦИЯ ---
+    transcription_start = time.time()
+    try:
+        # Если language_code передан в виде списка, берём первый элемент
+        if isinstance(language_code, list):
+            language_code = language_code[0] if language_code else ""
+        transcription, language, language_pred = send_audio_to_server(
+            stream_resampled, str(language_code)
+        )
+        # Убираем не вербальные обозначения (текст в скобках или квадратных скобках)
+        transcription = re.sub(r"\[.*?\]", "", transcription)
+        transcription = re.sub(r"\(.*?\)", "", transcription)
+        current_transcription = transcription
+    except Exception as e:
+        print("[*] Ошибка при транскрипции:", e)
+        transcription = "ERROR"
+        language = "ERROR"
+        language_pred = 0.0
+        current_transcription = ""
+    finally:
+        transcription_latency = time.time() - transcription_start
+        latency_data["total_transcription_latency"].append(transcription_latency)
 
-    # Reset the stream if it's already exceeding the maximum length
-    # This is required as for a longer audio the latency increases and we'd like to keep it as low as possible
+    total_latency = time.time() - start_time
+    latency_data["total_latency"].append(total_latency)
+
+    # Если длина аудиопотока превышает максимально допустимую – сбрасываем поток
     if len(stream) > sampling_rate * max_length:
         stream = None
         transcription_history.append(current_transcription)
         current_transcription = ""
 
-    display_text = f"{current_transcription}\n\n"
-    display_text += "\n\n".join(transcription_history[::-1])
+    display_text = f"{current_transcription}\n\n" + "\n\n".join(transcription_history[::-1])
 
+    # Формирование таблицы задержек
     info_df = pd.DataFrame(latency_data)
     info_df = info_df.apply(lambda x: x * 1000)
     info_df = info_df.describe().loc[["min", "max", "mean"]]
@@ -118,7 +162,16 @@ def dummy_function(stream, new_chunk, max_length, latency_data,
 
     language_and_pred_text = f"Predicted Language: {language} ({language_pred * 100:.2f}%)"
 
-    return stream, display_text, info_df, latency_data, current_transcription, transcription_history, language_and_pred_text
+    return (
+        stream,
+        display_text,
+        info_df,
+        latency_data,
+        current_transcription,
+        transcription_history,
+        language_and_pred_text
+    )
+
 
 
 custom_css = """
@@ -128,9 +181,11 @@ footer {visibility: hidden}
 
 with gr.Blocks(css=custom_css, theme=gr.themes.Soft()) as demo:
     gr.Markdown("# Live Transcription PoC\n\n")
-    nb_visitors_output = gr.Text(f"Page visits: {-1}",
-                                 interactive=False,
-                                 show_label=False)
+    nb_visitors_output = gr.Text(
+        f"Page visits: {-1}",
+        interactive=False,
+        show_label=False
+    )
 
     # Stores the audio data that we'll process
     stream_state = gr.State(None)
@@ -224,9 +279,14 @@ etc...
 
     # In gradio the default samplign rate is 48000 (https://github.com/gradio-app/gradio/issues/6526)
     # and the chunks size varies between 24000 and 48000 - so between 0.5sec and 1 sec
-    mic_audio_input.stream(dummy_function, [
-        stream_state, mic_audio_input, max_length_input, latency_data_state,
-        current_transcription_state, transcription_history_state,
+    mic_audio_input.stream(
+        process_audio_chunk, [
+        stream_state, 
+        mic_audio_input, 
+        max_length_input, 
+        latency_data_state,
+        current_transcription_state, 
+        transcription_history_state,
         language_code_input
     ], [
         stream_state, transcription_display, information_table_outout,
@@ -235,30 +295,57 @@ etc...
     ],
                            show_progress="hidden")
 
-    def _reset_button_click(stream_state, transcription_display,
-                            information_table_outout, latency_data_state,
-                            transcription_history_state,
-                            current_transcription_state):
+    def reset_transcription_session(
+        stream_state,
+        transcription_display,
+        information_table_output,
+        latency_data_state,
+        transcription_history_state,
+        current_transcription_state
+    ):
+        """
+        Сбрасывает состояние сессии транскрипции, очищая аудиопоток, историю транскрипций и данные задержек.
+        
+        Аргументы:
+            stream_state: Текущее состояние аудиопотока.
+            transcription_display: Отображаемый текст транскрипции.
+            information_table_output: Таблица с информацией о задержках.
+            latency_data_state: Состояние данных о задержках.
+            transcription_history_state: История транскрипций.
+            current_transcription_state: Текущая транскрипция.
+        
+        Возвращает:
+            tuple: Обновлённое состояние с обнулёнными значениями и пустой строкой для информации о языке.
+        """
         stream_state = None
         transcription_display = ""
-        information_table_outout = None
+        information_table_output = None
         latency_data_state = None
         transcription_history_state = []
         current_transcription_state = ""
+        language_and_pred_text = ""
+        return (
+            stream_state,
+            transcription_display,
+            information_table_output,
+            latency_data_state,
+            transcription_history_state,
+            current_transcription_state,
+            language_and_pred_text
+        )
 
-        return stream_state, transcription_display, information_table_outout, latency_data_state, transcription_history_state, current_transcription_state, ""
+    def on_page_load(request: gr.Request):
+        """
+        Обрабатывает загрузку страницы, обновляет счетчик посещений и возвращает статистику.
+        
+        Аргументы:
+            request (gr.Request): Объект запроса от Gradio.
+        
+        Возвращает:
+            str: Информация о количестве посещений и уникальных посетителях.
+        """
+        import datetime
 
-    reset_button.click(_reset_button_click, [
-        stream_state, transcription_display, information_table_outout,
-        latency_data_state, transcription_history_state,
-        current_transcription_state
-    ], [
-        stream_state, transcription_display, information_table_outout,
-        latency_data_state, transcription_history_state,
-        current_transcription_state, transcription_language_prod_output
-    ])
-
-    def _on_load(request: gr.Request):
         params = request.query_params
         user_ip = request.client.host
 
@@ -267,23 +354,21 @@ etc...
                 last_line = f.readlines()[-1]
                 last_number = int(last_line.split(",")[0])
         except Exception as e:
-            print("[*] Error with reading the file", e)
+            print("[*] Ошибка при чтении файла с посещениями:", e)
             last_number = 0
 
         with open("visits.csv", "a") as f:
-            f.write(
-                f"{last_number + 1},{datetime.datetime.now()},{user_ip},visited\n"
-            )
+            f.write(f"{last_number + 1},{datetime.datetime.now()},{user_ip},visited\n")
 
-        # Get the unique visitors count
-        unique_visitors = 0
-        with open("visits.csv", "r") as f:
-            nb_unique_visitors = len(
-                set([line.split(",")[2] for line in f.readlines()]))
+        try:
+            with open("visits.csv", "r") as f:
+                nb_unique_visitors = len(set(line.split(",")[2] for line in f.readlines()))
+        except Exception as e:
+            nb_unique_visitors = 0
 
         return f"Page visits: {last_number + 1} / Unique visitors: {nb_unique_visitors}"
 
-    demo.load(_on_load, [], [nb_visitors_output])
+    demo.load(on_page_load, [], [nb_visitors_output])
 
 SSL_CERT_PATH: Optional[str] = os.environ.get("SSL_CERT_PATH", None)
 SSL_KEY_PATH: Optional[str] = os.environ.get("SSL_KEY_PATH", None)
