@@ -156,21 +156,14 @@ def _reset_button_click(
     transcription_history_state: list,
     current_transcription_state: str,
     auto_translation_history_state: list
-) -> Tuple[None, None, list, str, str, str, str, str, list]:
+) -> Tuple[None, None, list, str, str, str, str, str, list, str]:
     """
-    Сбрасывает все состояния, связанные с транскрипцией и авто-переводом.
-
-    Аргументы:
-        stream_state (np.ndarray | None): Текущий аудиопоток.
-        latency_data_state (dict | None): Данные о задержке.
-        transcription_history_state (list): История транскрипций.
-        current_transcription_state (str): Текущий текст транскрипции.
-        auto_translation_history_state (list): История авто-переводов.
+    Сбрасывает все состояния, связанные с транскрипцией, авто-переводом и ручным переводом.
 
     Возвращает:
-        Tuple: Кортеж с новыми значениями состояний.
+        Tuple: Новые значения состояний, включая пустую строку для поля ручного перевода.
     """
-    return (None, None, [], "", "", "", "", "", [])
+    return (None, None, [], "", "", "", "", "", [], "")
 
 
 def apply_text_size(text: str, size: str) -> str:
@@ -185,6 +178,31 @@ def apply_text_size(text: str, size: str) -> str:
         str: HTML-строка, в которой текст представлен с новым размером шрифта.
     """
     return f'<div style="font-size: {size}; white-space: pre-wrap;">{text}</div>'
+
+
+def html_to_text(html: str) -> str:
+    """
+    Преобразует HTML-строку, сгенерированную apply_text_size(), в простой текст без тегов.
+    """
+    if html.startswith("<div"):
+        start = html.find(">") + 1
+        end = html.rfind("</div>")
+        return html[start:end]
+    return html
+
+
+def insert_text_from_transcription(transcription_html: str) -> str:
+    """
+    Извлекает чистый текст из HTML-блока транскрипции.
+    """
+    return html_to_text(transcription_html)
+
+
+def insert_text_from_translation(auto_translation_html: str) -> str:
+    """
+    Извлекает чистый текст из HTML-блока авто-перевода.
+    """
+    return html_to_text(auto_translation_html)
 
 
 def process_audio_stream(
@@ -234,7 +252,7 @@ def process_audio_stream(
         auto_translation_history (list): История авто-переводов.
 
     Возвращает:
-        Tuple: Обновленные состояния и HTML-отображения для транскрипции и авто-перевода.
+        Tuple: Обновлённые состояния и HTML-отображения для транскрипции и авто-перевода.
     """
     start_time = time.time()
 
@@ -322,7 +340,6 @@ def process_audio_stream(
     language_and_pred_text = f"Predicted Language: {language} ({language_pred * 100:.2f}%)"
 
     # Выполнение авто-перевода только для финализированной строки
-    # (т.е. только если завершился один из чанков)
     if auto_translate_checked and finalized_line is not None:
         try:
             auto_translated_line = translate_text(finalized_line, language if not source_lang else source_lang, target_lang)
@@ -334,7 +351,7 @@ def process_audio_stream(
     auto_translation_display = "\n\n" + "\n".join(auto_translation_history[::-1])
     auto_translation_html = apply_text_size(auto_translation_display, font_size)
 
-    # В данной функции ручной перевод не вычисляется – он вызывается отдельно
+    # Ручной перевод не вычисляется в этом потоке – он вызывается отдельно
     manual_translation = ""
 
     return (
@@ -476,6 +493,14 @@ with gr.Blocks(
                 label="Целевой язык",
                 multiselect=False
             )
+        with gr.Row():
+            insert_text_button = gr.Button("Вставить текст")
+            insert_translation_button = gr.Button("Вставить перевод")
+        manual_translation_input = gr.Textbox(
+            lines=5,
+            label="Текст для перевода",
+            interactive=True
+        )
         translate_button = gr.Button("Перевести")
         output_text = gr.Textbox(
             lines=5,
@@ -483,11 +508,23 @@ with gr.Blocks(
             interactive=False
         )
 
-        # Кнопка перевода вручную переводит весь текст из окна транскрибации
+        # Кнопка для ручного перевода теперь использует текст из поля manual_translation_input
         translate_button.click(
             translate_text,
-            inputs=[transcription_html, source_lang, target_lang],
+            inputs=[manual_translation_input, source_lang, target_lang],
             outputs=output_text
+        )
+        # Кнопка для вставки текста из блока транскрипции
+        insert_text_button.click(
+            insert_text_from_transcription,
+            inputs=[transcription_html],
+            outputs=manual_translation_input
+        )
+        # Кнопка для вставки текста из блока авто-перевода
+        insert_translation_button.click(
+            insert_text_from_translation,
+            inputs=[auto_translation_html],
+            outputs=manual_translation_input
         )
 
     # -------------------------------------------------------------------------
@@ -553,7 +590,7 @@ with gr.Blocks(
         show_progress="hidden"
     )
 
-    # Привязка кнопки для сброса состояний (сбросим и историю авто-перевода)
+    # Привязка кнопки для сброса состояний (сбросим и историю авто-перевода, и поле ручного перевода)
     reset_button.click(
         _reset_button_click,
         inputs=[
@@ -572,7 +609,8 @@ with gr.Blocks(
             transcription_html,
             output_text,
             auto_translation_html,
-            auto_translation_history_state
+            auto_translation_history_state,
+            manual_translation_input
         ]
     )
 
