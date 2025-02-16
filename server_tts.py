@@ -54,13 +54,14 @@ def text_to_speech_silero(
         file_to_save="output_ru.mp3", 
         sample_rate=24000,
         speaker=model_speaker, 
+        max_string_length: int = 999,
         put_accent=True, 
         put_yo=True
     ):
     """Генерирует аудио из текста (Silero TTS) с использованием загруженной модели."""
     try:
         audio = model_ru.apply_tts(
-            text=text,
+            text=text[:max_string_length],
             speaker=speaker,
             sample_rate=sample_rate,
             put_accent=put_accent,
