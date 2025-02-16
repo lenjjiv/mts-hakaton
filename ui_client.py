@@ -1,3 +1,4 @@
+### ui_client.py
 import os
 import time
 import json
@@ -64,7 +65,7 @@ def translate_text(text: str, source_lang: str, target_lang: str) -> str:
         return f"Ошибка {response.status_code}: {response.text}"
 
 
-def tts_from_server(text: str, lang: str, save_path: str, endpoint_url = "http://localhost:8002/stream-audio") -> None:
+def tts_from_server(text: str, lang: str, save_path: str, endpoint_url="http://localhost:8002/stream-audio") -> None:
     """
     Обращается к серверу, который преобразует текст в речь, и сохраняет полученный аудиофайл.
     """
@@ -88,7 +89,7 @@ def text_to_speech(text: str, language: str = "en") -> str:
     """
     temp_dir = "tmp_client"
     os.makedirs(temp_dir, exist_ok=True)
-    save_path = temp_dir + "/downloaded_audio.mp3"
+    save_path = os.path.join(temp_dir, "downloaded_audio.mp3")
     tts_from_server(text, language, save_path)
     return save_path
 
@@ -312,6 +313,15 @@ def process_audio_stream(
         last_finalize_time           # обновлённое время финализации
     )
 
+def update_font_size_callback(transcription_html: str, auto_translation_html: str, new_font_size: str) -> Tuple[str, str]:
+    """
+    Обновляет размер шрифта для блоков транскрипции и авто-перевода, используя новый размер.
+    """
+    transcription_text = html_to_text(transcription_html)
+    auto_translation_text = html_to_text(auto_translation_html)
+    new_transcription_html = apply_text_size(transcription_text, new_font_size)
+    new_auto_translation_html = apply_text_size(auto_translation_text, new_font_size)
+    return new_transcription_html, new_auto_translation_html
 
 # -----------------------------------------------------------------------------
 #                            СОЗДАНИЕ ИНТЕРФЕЙСА
@@ -322,6 +332,7 @@ with gr.Blocks(
 ) as demo:
 
     gr.Markdown("# Live-транскрибация, перевод текста в речь и автоматический перевод")
+    gr.Markdown("**Что здесь?** Данный интерфейс позволяет выполнять три основные задачи: живую транскрипцию речи с микрофона, машинный перевод текста и преобразование текста в речь (TTS). Используйте соответствующие разделы для работы с каждым из сервисов.")
 
     # Состояния
     stream_state = gr.State(None)
@@ -336,20 +347,10 @@ with gr.Blocks(
     # -----------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Живая транскрипция")
-        with gr.Accordion(label="Как использовать", open=False):
-            gr.Markdown("""
-1. Нажмите **Start** и разрешите доступ к микрофону.  
-2. Выберите язык (или оставьте Auto detect).  
-3. Настройте максимальную длину аудио и длительность перекрытия между чанками.  
-4. Используйте слайдер для задания интервала (N секунд), по истечении которого текущая строка опускается в историю.  
-5. Нажмите **Stop**, чтобы остановить запись.  
-6. Чтобы очистить данные и начать заново, нажмите **Reset** (кнопка ниже).  
-7. Для автоматического перевода новых строк установите галочку **Авто-перевод**.  
-8. Для ручного перевода всего текста используйте блок справа.
-            """)
+        gr.Markdown("**Что здесь?** В этом разделе происходит запись аудио с микрофона, его автоматическая транскрипция и, при желании, автоматический перевод. Настройте параметры для управления длительностью аудио чанков, перекрытием и интервалом финализации транскрипции.")
 
         with gr.Row():
-            mic_audio_input = gr.Audio(sources=["microphone"], streaming=True, label="Микрофон")
+            mic_audio_input = gr.Audio(sources=["microphone"], streaming=True, label="Микрофон (запись аудио)")
             language_code_input = gr.Dropdown(
                 [
                     ("Auto detect", ""),
@@ -359,7 +360,7 @@ with gr.Blocks(
                     ("Russian", "ru")
                 ],
                 value="",
-                label="Код языка",
+                label="Код языка (распознавание)",
                 multiselect=False
             )
             max_length_input = gr.Slider(
@@ -367,57 +368,62 @@ with gr.Blocks(
                 minimum=2,
                 maximum=30,
                 step=1,
-                label="Длина одного чанка (сек)"
+                label="Длина одного чанка (сек)",
+                info="Максимальная длительность аудио перед финализацией"
             )
             overlap_slider = gr.Slider(
                 value=2.0,
                 minimum=0.0,
                 maximum=5.0,
                 step=0.1,
-                label="Перекрытие чанков (сек)"
+                label="Перекрытие чанков (сек)",
+                info="Длительность перекрытия между аудио чанками"
             )
             finalize_interval_slider = gr.Slider(
-                value=7,
+                value=6,
                 minimum=2,
                 maximum=30,
                 step=1,
-                label="Интервал финализации строки (сек)"
+                label="Интервал обновления строки (сек)",
+                info="Интервал, через который текущая строка переносится в историю"
             )
 
         with gr.Row():
-            transcription_html = gr.HTML(label="Транскрипция", elem_id="transcription_display_container")
+            transcription_html = gr.HTML(label="Транскрипция (автоматическая)", elem_id="transcription_display_container")
             auto_translation_html = gr.HTML(label="Автоматический перевод", elem_id="auto_translation_display_container")
 
         transcription_language_prod_output = gr.Text(
             lines=1,
-            show_label=False,
+            show_label=True,
+            label="Информация о распознанном языке",
             interactive=False
         )
 
         with gr.Row():
-            auto_translate_checkbox = gr.Checkbox(label="Авто-перевод", value=False, interactive=True)
+            auto_translate_checkbox = gr.Checkbox(label="Авто-перевод (вкл/выкл) [справа от оригинала транскрипта]", value=False, interactive=True)
             font_size_dropdown = gr.Dropdown(
                 [
                     "8px", "10px", "12px", "14px", "16px",
                     "18px", "20px", "24px", "36px", "48px"
                 ],
                 value="14px",
-                label="Размер шрифта",
+                label="Размер шрифта текста",
                 multiselect=False
             )
 
         with gr.Row():
-            info_table_output = gr.HTML(label="Статистика задержек")
+            info_table_output = gr.HTML(label="Статистика задержек (в миллисекундах)")
 
         # Кнопка Reset вынесена в отдельный ряд под блоком
         with gr.Row():
-            reset_button = gr.Button("Reset")
+            reset_button = gr.Button("Reset (Сброс всех данных)")
 
     # -----------------------------------------------------------------------------
     #                           БЛОК ПЕРЕВОДА ТЕКСТА (РУЧНОЙ)
     # -----------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Машинный перевод текста")
+        gr.Markdown("**Что здесь?** Здесь вы можете вручную перевести текст. Выберите язык оригинала и язык перевода, затем используйте кнопки для вставки текста из транскрипции или автоматического перевода.")
         with gr.Row():
             source_lang = gr.Dropdown(
                 [
@@ -441,24 +447,25 @@ with gr.Blocks(
                     ("German", "de"),
                     ("Hungarian", "hu"),
                     ("Russian", "ru"),
-                    ("🐖", "🐖ru_pig🐖"),
+                    ("🐖", "🐖ru_pig🐖(full_stilization)"),
                 ],
                 value="en",
                 label="Язык перевода",
                 multiselect=False
             )
         with gr.Row():
-            insert_text_button = gr.Button("Вставить текст")
-            insert_translation_button = gr.Button("Вставить перевод")
+            insert_text_button = gr.Button("Вставить транскрипцию")
+            insert_translation_button = gr.Button("Вставить авто-перевод")
         manual_translation_input = gr.Textbox(
             lines=5,
-            label="Текст для перевода",
-            interactive=True
+            label="Текст для перевода (вставьте или введите текст)",
+            interactive=True,
+            placeholder="Здесь будет отображаться текст для перевода..."
         )
-        translate_button = gr.Button("Перевести")
+        translate_button = gr.Button("Перевести текст")
         output_text = gr.Textbox(
             lines=5,
-            label="Переведённый текст (ручной перевод)",
+            label="Результат перевода (ручной перевод)",
             interactive=False
         )
 
@@ -479,12 +486,13 @@ with gr.Blocks(
         )
 
     # -----------------------------------------------------------------------------
-    #                           БЛОК ТЕКСТ В РЕЧЬ
+    #                           БЛОК ТЕКСТ В РЕЧЬ (TTS)
     # -----------------------------------------------------------------------------
     with gr.Column():
         gr.Markdown("## Текст в речь (TTS)")
+        gr.Markdown("**Что здесь?** В этом разделе вы можете преобразовать введённый текст в аудиофайл с речью. Выберите язык TTS и используйте кнопки для вставки текста из транскрипции или авто-перевода.")
         with gr.Row():
-            tts_text_box = gr.Textbox(label="Текст")
+            tts_text_box = gr.Textbox(label="Текст для TTS (введите или вставьте текст)", placeholder="Введите текст для преобразования в речь...")
             tts_lanuage_code = gr.Dropdown(
                 [
                     ("Russian", "ru"),
@@ -494,12 +502,11 @@ with gr.Blocks(
                 label="Язык для TTS",
                 multiselect=False
             )
-        # Добавляем кнопки для вставки текста в TTS-блок
         with gr.Row():
-            tts_insert_text_button = gr.Button("Вставить текст")
-            tts_insert_translation_button = gr.Button("Вставить перевод")
+            tts_insert_text_button = gr.Button("Вставить транскрипцию в TTS")
+            tts_insert_translation_button = gr.Button("Вставить авто-перевод в TTS")
         load_audio_button = gr.Button("Преобразовать текст в речь")
-        loaded_audio_display = gr.Audio(label="Сгенерированный аудиофайл", interactive=False)
+        loaded_audio_display = gr.Audio(label="Сгенерированный аудиофайл (TTS)", interactive=False)
 
         tts_insert_text_button.click(
             insert_text_from_transcription,
@@ -525,14 +532,14 @@ with gr.Blocks(
         fn=process_audio_stream,
         inputs=[
             stream_state,                      # текущий аудиопоток
-            mic_audio_input,                   # новые аудиоданные
+            mic_audio_input,                   # новые аудиоданные с микрофона
             max_length_input,                  # длина чанка (сек)
-            overlap_slider,                    # перекрытие (сек)
+            overlap_slider,                    # перекрытие чанков (сек)
             latency_data_state,                # данные задержек
-            current_transcription_state,
-            transcription_history_state,
-            language_code_input,
-            font_size_dropdown,
+            current_transcription_state,       # текущая транскрипция
+            transcription_history_state,       # история транскрипций
+            language_code_input,               # выбор кода языка
+            font_size_dropdown,                # выбранный размер шрифта
             source_lang,                       # исходный язык для перевода
             target_lang,                       # целевой язык для перевода
             auto_translate_checkbox,           # авто-перевод включён/выключён
@@ -580,7 +587,15 @@ with gr.Blocks(
             last_finalize_time_state
         ]
     )
-
+    
+    # -----------------------------------------------------------------------------
+    # Обновление размера шрифта в реальном времени при изменении значения dropdown
+    # -----------------------------------------------------------------------------
+    font_size_dropdown.change(
+        fn=update_font_size_callback,
+        inputs=[transcription_html, auto_translation_html, font_size_dropdown],
+        outputs=[transcription_html, auto_translation_html]
+    )
 
 # -----------------------------------------------------------------------------
 #                       ЗАПУСК GRADIO-ПРИЛОЖЕНИЯ
