@@ -1,3 +1,4 @@
+### server_tts.py
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from TTS.api import TTS
@@ -48,8 +49,14 @@ def text_to_speech_coqui(text: str, file_to_save="output_en.mp3", speed=1.0):
         logger.error(f"Ошибка в Coqui TTS: {e}")
         return None
 
-def text_to_speech_silero(text: str, file_to_save="output_ru.mp3", sample_rate=24000,
-                          speaker=model_speaker, put_accent=True, put_yo=True):
+def text_to_speech_silero(
+        text: str, 
+        file_to_save="output_ru.mp3", 
+        sample_rate=24000,
+        speaker=model_speaker, 
+        put_accent=True, 
+        put_yo=True
+    ):
     """Генерирует аудио из текста (Silero TTS) с использованием загруженной модели."""
     try:
         audio = model_ru.apply_tts(
